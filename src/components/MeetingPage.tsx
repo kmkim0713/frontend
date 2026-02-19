@@ -46,8 +46,11 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const [joined, setJoined] = useState<boolean>(false);
   const [peers, setPeers] = useState<PeersState>({});
   const [activeTab, setActiveTab] = useState<'meeting' | 'guide'>('meeting');
+  const [micEnabled, setMicEnabled] = useState<boolean>(true);
+  const [cameraEnabled, setCameraEnabled] = useState<boolean>(true);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
   const socketRef = useRef<TypedSocket | null>(null);
   const deviceRef = useRef<mediasoupClient.types.Device | null>(null);
   const sendTransportRef = useRef<mediasoupClient.types.Transport | null>(null);
@@ -230,8 +233,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       }
     };
 
-    console.log(getVideoConstraints())
-
     const stream = await navigator.mediaDevices.getUserMedia({
       video: getVideoConstraints(),
       audio: true
@@ -240,7 +241,35 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = stream;
     }
+
+    localStreamRef.current = stream;
     return stream;
+  };
+
+  const handleMicToggle = (): void => {
+    if (!localStreamRef.current) return;
+
+    const audioTracks = localStreamRef.current.getAudioTracks();
+    const newState = !micEnabled;
+
+    audioTracks.forEach((track) => {
+      track.enabled = newState;
+    });
+
+    setMicEnabled(newState);
+  };
+
+  const handleCameraToggle = (): void => {
+    if (!localStreamRef.current) return;
+
+    const videoTracks = localStreamRef.current.getVideoTracks();
+    const newState = !cameraEnabled;
+
+    videoTracks.forEach((track) => {
+      track.enabled = newState;
+    });
+
+    setCameraEnabled(newState);
   };
 
   const handleJoin = async (): Promise<void> => {
@@ -436,6 +465,10 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     if (stream) {
       stream.getTracks().forEach((track: MediaStreamTrack) => track.stop());
     }
+
+    localStreamRef.current = null;
+    setMicEnabled(true);
+    setCameraEnabled(true);
     setPeers({});
     setJoined(false);
 
@@ -522,11 +555,31 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
                 LEAVE
               </button>
             )}
-            <button disabled style={styles.controlButton}>
-              MIC OFF
+            <button
+              onClick={handleMicToggle}
+              disabled={!joined}
+              style={{
+                ...styles.controlButton,
+                cursor: joined ? 'pointer' : 'not-allowed',
+                opacity: micEnabled ? 1 : 0.6,
+                borderColor: !micEnabled && joined ? '#ff6b6b' : undefined,
+                borderWidth: !micEnabled && joined ? '2px' : undefined,
+              }}
+            >
+              {micEnabled ? 'MIC ON' : 'MIC OFF'}
             </button>
-            <button disabled style={styles.controlButton}>
-              CAMERA OFF
+            <button
+              onClick={handleCameraToggle}
+              disabled={!joined}
+              style={{
+                ...styles.controlButton,
+                cursor: joined ? 'pointer' : 'not-allowed',
+                opacity: cameraEnabled ? 1 : 0.6,
+                borderColor: !cameraEnabled && joined ? '#ff6b6b' : undefined,
+                borderWidth: !cameraEnabled && joined ? '2px' : undefined,
+              }}
+            >
+              {cameraEnabled ? 'CAMERA ON' : 'CAMERA OFF'}
             </button>
             <button disabled style={styles.controlButton}>
               START SCREEN SHARE
