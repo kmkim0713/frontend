@@ -1,3 +1,8 @@
+export interface User {
+  userId: string;
+  userName: string;
+}
+
 export interface IceServerConfig extends RTCIceServer {
   urls: string;
   username?: string;
