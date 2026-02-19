@@ -4,4 +4,10 @@ export interface IceServerConfig extends RTCIceServer {
   credential?: string;
 }
 
-export type PeersState = Record<string, MediaStream>;
+export interface PeerInfo {
+  stream: MediaStream;
+  userId: string;
+  userName: string;
+}
+
+export type PeersState = Record<string, PeerInfo>;

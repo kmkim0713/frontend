@@ -8,16 +8,20 @@ export interface ServerToClientEvents {
     producerId: string;
     id: string;
     kind: types.MediaKind;
+    userId: string;
+    userName: string;
   }) => void;
   'peer-disconnected': (peerId: string) => void;
 }
 
 export interface ClientToServerEvents {
   'join-room': (
-    data: { roomId: string },
+    data: { meetingId: string; userId: string; userName: string },
     callback: (response: {
       existingProducers: Array<{
         peerId: string;
+        userId: string;
+        userName: string;
         producers: Array<{
           id: string;
           kind: types.MediaKind;
@@ -52,7 +56,7 @@ export interface ClientToServerEvents {
     },
     callback: (consumerData: ConsumerData) => void
   ) => void;
-  'leave-room': (data: { roomId: string }) => void;
+  'leave-room': (data: { meetingId: string }) => void;
 }
 
 export type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;

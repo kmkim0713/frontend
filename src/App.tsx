@@ -21,9 +21,13 @@ const ICE_SERVERS: IceServerConfig[] = [
     credential: import.meta.env.VITE_TURN_CREDENTIAL,
   },
 ];
-const ROOM_ID: string = 'default';
 
 const App: FC = () => {
+  // form 입력: useState
+  const [meetingId, setMeetingId] = useState<string>('');
+  const [userId, setUserId] = useState<string>('');
+  const [userName, setUserName] = useState<string>('');
+
   // 상태
   const [joined, setJoined] = useState<boolean>(false);
   const [peers, setPeers] = useState<PeersState>({});
@@ -35,6 +39,7 @@ const App: FC = () => {
   const sendTransportRef = useRef<mediasoupClient.types.Transport | null>(null);
   const producerRef = useRef<ProducerRefs | null>(null);
   const consumerTransportsRef = useRef<ConsumerTransportsRef>({});
+  const currentMeetingIdRef = useRef<string | null>(null);
 
   // 로컬 스트림 시작
   const startLocalStream = async (): Promise<MediaStream> => {
@@ -50,15 +55,26 @@ const App: FC = () => {
     console.log("🛑🛑🛑 ~~~ :35 ~~~ handleJoin ~~~ socketRef.current:", socketRef.current);
 
     if (socketRef.current === null) {
+      // 1. 검증
+      if (!meetingId.trim() || !userId.trim() || !userName.trim()) {
+        alert('미팅 ID, 사용자 ID, 이름을 모두 입력해주세요.');
+        return;
+      }
+
+      // 2. 소켓 연결
       socketRef.current = io(SIGNALING_SERVER);
       setJoined(true);
       const stream = await startLocalStream();
 
-      socketRef.current.emit('join-room', { roomId: ROOM_ID }, async ({ existingProducers }) => {
+      // 3. 세션 ref에 저장 (leave 시 input 재참조 방지)
+      currentMeetingIdRef.current = meetingId;
+
+      // 4. join-room emit
+      socketRef.current.emit('join-room', { meetingId, userId, userName }, async ({ existingProducers }) => {
         console.log('기존 프로듀서들:', existingProducers);
 
         for (const peerInfo of existingProducers) {
-          const { peerId, producers } = peerInfo;
+          const { peerId, producers, userId: peerUserId, userName: peerUserName } = peerInfo;
 
           if (!consumerTransportsRef.current[peerId]) {
             const recvTransportData = await new Promise<TransportData>(resolve =>
@@ -96,9 +112,17 @@ const App: FC = () => {
             });
 
             setPeers(prev => {
-              const existingStream = prev[peerId] || new MediaStream();
-              existingStream.addTrack(consumer.track);
-              return { ...prev, [peerId]: existingStream };
+              const existingStream = prev[peerId];
+              const newStream = existingStream ? existingStream.stream : new MediaStream();
+              newStream.addTrack(consumer.track);
+              return {
+                ...prev,
+                [peerId]: {
+                  stream: newStream,
+                  userId: peerUserId,
+                  userName: peerUserName,
+                }
+              };
             });
           }
         }
@@ -147,7 +171,7 @@ const App: FC = () => {
       };
 
       // 4. 서버로부터 다른 참여자 정보 받기
-      socketRef.current.on('newConsumer', async ({ producerId, id, kind }) => {
+      socketRef.current.on('newConsumer', async ({ producerId, id, kind, userId: peerUserId, userName: peerUserName }) => {
         if (!consumerTransportsRef.current[id]) {
           const recvTransportData = await new Promise<TransportData>(resolve =>
             socketRef.current?.emit('create-web-rtc-transport', { direction: 'recv' }, resolve)
@@ -178,15 +202,22 @@ const App: FC = () => {
           const newStream = new MediaStream();
           newStream.addTrack(consumer.track);
 
-          setPeers(prev => ({ ...prev, [id]: newStream }));
+          setPeers(prev => ({
+            ...prev,
+            [id]: {
+              stream: newStream,
+              userId: peerUserId,
+              userName: peerUserName,
+            }
+          }));
         }
       });
 
       socketRef.current.on('peer-disconnected', (peerId: string) => {
         console.log("disconnect?")
         setPeers(prev => {
-          const stream = prev[peerId];
-          if (stream) stream.getTracks().forEach(track => track.stop());
+          const peerInfo = prev[peerId];
+          if (peerInfo) peerInfo.stream.getTracks().forEach(track => track.stop());
           const { [peerId]: _, ...rest } = prev;
           return rest;
         });
@@ -213,10 +244,12 @@ const App: FC = () => {
     setPeers({});
     setJoined(false);
 
-    socketRef.current?.emit('leave-room', { roomId: ROOM_ID });
+    // 입력 DOM 재참조 없이 세션 ref 사용
+    socketRef.current?.emit('leave-room', { meetingId: currentMeetingIdRef.current! });
 
     socketRef.current?.disconnect();
     socketRef.current = null;
+    currentMeetingIdRef.current = null;
   };
 
   useEffect(() => {
@@ -225,8 +258,42 @@ const App: FC = () => {
 
   return (
     <div style={{ padding: 20 }}>
-      {!joined && <button onClick={handleJoin}>입장</button>}
-      {joined && <button onClick={handleLeave}>퇴장</button>}
+      <div style={{ marginBottom: 20, display: 'flex', gap: 10, flexDirection: 'column' }}>
+        <div>
+          <label style={{ display: 'block', marginBottom: 5 }}>미팅 ID</label>
+          <input
+            value={meetingId}
+            onChange={e => setMeetingId(e.target.value)}
+            placeholder="미팅 ID 입력"
+            disabled={joined}
+            style={{ padding: 8, width: '100%', maxWidth: 300 }}
+          />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 5 }}>사용자 ID</label>
+          <input
+            value={userId}
+            onChange={e => setUserId(e.target.value)}
+            placeholder="사용자 ID 입력"
+            disabled={joined}
+            style={{ padding: 8, width: '100%', maxWidth: 300 }}
+          />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: 5 }}>이름</label>
+          <input
+            value={userName}
+            onChange={e => setUserName(e.target.value)}
+            placeholder="이름 입력"
+            disabled={joined}
+            style={{ padding: 8, width: '100%', maxWidth: 300 }}
+          />
+        </div>
+      </div>
+
+      {!joined && <button onClick={handleJoin} style={{ padding: '10px 20px', cursor: 'pointer' }}>입장</button>}
+      {joined && <button onClick={handleLeave} style={{ padding: '10px 20px', cursor: 'pointer', backgroundColor: '#ff6b6b', color: 'white' }}>퇴장</button>}
+
       <div style={{ display: 'flex', flexWrap: 'wrap', marginTop: 20 }}>
         <div style={{ margin: 10 }}>
           <video
@@ -236,19 +303,19 @@ const App: FC = () => {
             muted
             style={{ width: 200, height: 150, backgroundColor: '#000' }}
           />
-          <p>나</p>
+          <p>나 ({userName})</p>
         </div>
-        {Object.entries(peers).map(([id, stream]) => (
+        {Object.entries(peers).map(([id, peerInfo]) => (
           <div key={id} style={{ margin: 10 }}>
             <video
               ref={el => {
-                if (el) el.srcObject = stream;
+                if (el) el.srcObject = peerInfo.stream;
               }}
               autoPlay
               playsInline
               style={{ width: 200, height: 150, backgroundColor: '#000' }}
             />
-            <p>{id}</p>
+            <p>{peerInfo.userName} ({peerInfo.userId})</p>
           </div>
         ))}
       </div>
