@@ -3,8 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "vite",
+    "start:local": "vite",
+    "start:dev": "vite --mode dev",
     "build": "tsc && vite build",
+    "build:prd": "tsc && vite build --mode prd",
     "preview": "vite preview",
     "type-check": "tsc --noEmit"
   },

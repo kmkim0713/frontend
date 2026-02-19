@@ -1,103 +1,29 @@
 import { useState, useRef, useEffect, FC } from 'react';
-import io, { Socket } from 'socket.io-client';
+import io from 'socket.io-client';
 import * as mediasoupClient from 'mediasoup-client';
-import { types } from 'mediasoup-client';
+import type {
+  TypedSocket,
+  TransportData,
+  ConsumerData,
+  ProducerRefs,
+  PeersState,
+  ConsumerTransportsRef,
+  IceServerConfig,
+} from './types';
 
-// Socket.IO 서버→클라이언트 이벤트 타입
-interface ServerToClientEvents {
-  'rtp-capabilities': (rtpCapabilities: types.RtpCapabilities) => void;
-  'newConsumer': (data: {
-    producerId: string;
-    id: string;
-    kind: types.MediaKind;
-  }) => void;
-  'peer-disconnected': (peerId: string) => void;
-}
-
-// Socket.IO 클라이언트→서버 이벤트 타입
-interface ClientToServerEvents {
-  'join-room': (
-    data: { roomId: string },
-    callback: (response: {
-      existingProducers: Array<{
-        peerId: string;
-        producers: Array<{
-          id: string;
-          kind: types.MediaKind;
-        }>;
-      }>;
-    }) => void
-  ) => void;
-  'create-web-rtc-transport': (
-    data: { direction?: 'recv' | 'send' },
-    callback: (transportData: TransportData) => void
-  ) => void;
-  'connect-transport': (
-    data: {
-      transportId: string;
-      dtlsParameters: types.DtlsParameters;
-    },
-    callback: () => void
-  ) => void;
-  'produce': (
-    data: {
-      transportId: string;
-      kind: types.MediaKind;
-      rtpParameters: types.RtpParameters;
-    },
-    callback: (response: { id: string }) => void
-  ) => void;
-  'consume': (
-    data: {
-      transportId: string;
-      producerId: string;
-      kind: types.MediaKind;
-    },
-    callback: (consumerData: ConsumerData) => void
-  ) => void;
-  'leave-room': (data: { roomId: string }) => void;
-}
-
-type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
-
-// 커스텀 타입 정의
-interface TransportData {
-  id: string;
-  iceParameters: types.IceParameters;
-  iceCandidates: types.IceCandidate[];
-  dtlsParameters: types.DtlsParameters;
-}
-
-interface ConsumerData {
-  id: string;
-  producerId: string;
-  kind: types.MediaKind;
-  rtpParameters: types.RtpParameters;
-}
-
-interface ProducerRefs {
-  video: types.Producer | null;
-  audio: types.Producer | null;
-}
-
-type PeersState = Record<string, MediaStream>;
-type ConsumerTransportsRef = Record<string, types.Transport>;
-
-interface IceServerConfig extends RTCIceServer {
-  urls: string;
-  username?: string;
-  credential?: string;
-}
+// 환경 변수에서 서버 주소 로드
+const SIGNALING_SERVER: string = import.meta.env.VITE_SIGNALING_SERVER;
+const ICE_SERVERS: IceServerConfig[] = [
+  { urls: import.meta.env.VITE_STUN_SERVER },
+  {
+    urls: import.meta.env.VITE_TURN_SERVER,
+    username: import.meta.env.VITE_TURN_USERNAME,
+    credential: import.meta.env.VITE_TURN_CREDENTIAL,
+  },
+];
+const ROOM_ID: string = 'default';
 
 const App: FC = () => {
-  // 상수
-  const SIGNALING_SERVER: string = 'http://localhost:3000';
-  const ICE_SERVERS: IceServerConfig[] = [
-    { urls: 'stun:127.0.0.1:3478' },
-    { urls: 'turn:127.0.0.1:3478', username: 'user1', credential: 'pass1' }
-  ];
-  const roomId: string = 'default';
-
   // 상태
   const [joined, setJoined] = useState<boolean>(false);
   const [peers, setPeers] = useState<PeersState>({});
@@ -105,8 +31,8 @@ const App: FC = () => {
   // 참조
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const socketRef = useRef<TypedSocket | null>(null);
-  const deviceRef = useRef<types.Device | null>(null);
-  const sendTransportRef = useRef<types.Transport | null>(null);
+  const deviceRef = useRef<mediasoupClient.types.Device | null>(null);
+  const sendTransportRef = useRef<mediasoupClient.types.Transport | null>(null);
   const producerRef = useRef<ProducerRefs | null>(null);
   const consumerTransportsRef = useRef<ConsumerTransportsRef>({});
 
@@ -128,7 +54,7 @@ const App: FC = () => {
       setJoined(true);
       const stream = await startLocalStream();
 
-      socketRef.current.emit('join-room', { roomId }, async ({ existingProducers }) => {
+      socketRef.current.emit('join-room', { roomId: ROOM_ID }, async ({ existingProducers }) => {
         console.log('기존 프로듀서들:', existingProducers);
 
         for (const peerInfo of existingProducers) {
@@ -179,7 +105,7 @@ const App: FC = () => {
       });
 
       // 1. 서버로부터 Router RTP Capabilities 받기
-      const rtpCapabilities = await new Promise<types.RtpCapabilities>(resolve => {
+      const rtpCapabilities = await new Promise<mediasoupClient.types.RtpCapabilities>(resolve => {
         socketRef.current?.once('rtp-capabilities', resolve);
       });
       console.log('RTP Capabilities', rtpCapabilities);
@@ -287,7 +213,7 @@ const App: FC = () => {
     setPeers({});
     setJoined(false);
 
-    socketRef.current?.emit('leave-room', { roomId });
+    socketRef.current?.emit('leave-room', { roomId: ROOM_ID });
 
     socketRef.current?.disconnect();
     socketRef.current = null;
