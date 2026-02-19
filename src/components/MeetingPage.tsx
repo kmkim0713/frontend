@@ -11,6 +11,7 @@ import type {
   IceServerConfig,
   User,
 } from '../types';
+import { styles } from "../styles/meetingPage";
 
 interface MeetingPageProps {
   user: User;
@@ -27,7 +28,9 @@ const ICE_SERVERS: IceServerConfig[] = [
   },
 ];
 
+
 const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
+  
   const [meetingId, setMeetingId] = useState<string>('');
   const [joined, setJoined] = useState<boolean>(false);
   const [peers, setPeers] = useState<PeersState>({});
@@ -40,9 +43,28 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const producerRef = useRef<ProducerRefs | null>(null);
   const consumerTransportsRef = useRef<ConsumerTransportsRef>({});
   const currentMeetingIdRef = useRef<string | null>(null);
+  const [resolution, setResolution] = useState<'360p' | '480p' | '720p'>('360p');
 
   const startLocalStream = async (): Promise<MediaStream> => {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    const getVideoConstraints = () => {
+      switch (resolution) {
+        case '360p':
+          return { width: { ideal: 640 }, height: { ideal: 360 } };
+        case '480p':
+          return { width: { ideal: 640 }, height: { ideal: 480 } };
+        case '720p':
+        default:
+          return { width: { ideal: 1280 }, height: { ideal: 720 } };
+      }
+    };
+
+    console.log(getVideoConstraints())
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: getVideoConstraints(),
+      audio: true
+    });
+
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = stream;
     }
@@ -309,10 +331,12 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         </div>
 
         <div style={styles.controlRow}>
-          <select disabled style={styles.resolutionSelect}>
-            <option>720p</option>
-            <option>1080p</option>
+          <select style={styles.resolutionSelect}
+            value={resolution}
+            onChange={(e) => setResolution(e.target.value as any)}>
+            <option>360p</option>
             <option>480p</option>
+            <option>720p</option>
           </select>
 
           <div style={styles.buttonGroup}>
@@ -452,253 +476,5 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   );
 };
 
-const styles = {
-  container: {
-    display: 'flex',
-    flexDirection: 'column',
-    minHeight: '100vh',
-    background: 'var(--bg-primary)',
-  } as React.CSSProperties,
-  header: {
-    borderBottom: '1px solid var(--border-subtle)',
-    background: 'var(--bg-surface)',
-    padding: '20px 24px',
-  } as React.CSSProperties,
-  headerContent: {
-    maxWidth: '1200px',
-    margin: '0 auto',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  } as React.CSSProperties,
-  headerTitle: {
-    fontSize: '18px',
-    fontWeight: '700',
-    color: 'var(--text-primary)',
-    margin: '0 0 4px 0',
-  } as React.CSSProperties,
-  headerSubtitle: {
-    fontSize: '12px',
-    color: 'var(--text-muted)',
-    margin: 0,
-  } as React.CSSProperties,
-  headerTabs: {
-    display: 'flex',
-    gap: '8px',
-  } as React.CSSProperties,
-  tabButton: {
-    border: '1px solid var(--border-subtle)',
-    borderRadius: '6px',
-    padding: '8px 16px',
-    fontSize: '12px',
-    fontWeight: '600',
-    cursor: 'pointer',
-    transition: 'all 0.2s ease',
-    background: 'transparent',
-    color: 'var(--text-primary)',
-  } as React.CSSProperties,
-  tabButtonActive: {
-    background: 'var(--btn-primary)',
-    border: '1px solid var(--btn-primary)',
-    color: 'white',
-  } as React.CSSProperties,
-  tabButtonInactive: {
-    background: 'transparent',
-    border: '1px solid var(--border-subtle)',
-  } as React.CSSProperties,
-  content: {
-    flex: 1,
-    maxWidth: '1200px',
-    margin: '0 auto',
-    width: '100%',
-    padding: '24px',
-  } as React.CSSProperties,
-  contentTitle: {
-    fontSize: '20px',
-    fontWeight: '700',
-    color: 'var(--text-primary)',
-    marginBottom: '24px',
-  } as React.CSSProperties,
-  fieldsetWrapper: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-    marginBottom: '16px',
-  } as React.CSSProperties,
-  fieldsetLabel: {
-    fontSize: '12px',
-    fontWeight: '600',
-    color: 'var(--text-primary)',
-    textTransform: 'uppercase',
-    letterSpacing: '0.5px',
-  } as React.CSSProperties,
-  roomIdInput: {
-    background: 'var(--bg-input)',
-    color: 'var(--text-primary)',
-    border: '1px solid var(--border-input)',
-    borderRadius: '6px',
-    padding: '12px 14px',
-    fontSize: '14px',
-    outline: 'none',
-    width: '100%',
-  } as React.CSSProperties,
-  controlRow: {
-    display: 'flex',
-    gap: '12px',
-    alignItems: 'center',
-    marginBottom: '24px',
-    flexWrap: 'wrap',
-  } as React.CSSProperties,
-  resolutionSelect: {
-    background: 'var(--bg-input)',
-    color: 'var(--text-primary)',
-    border: '1px solid var(--border-input)',
-    borderRadius: '6px',
-    padding: '10px 12px',
-    fontSize: '12px',
-    cursor: 'pointer',
-    minWidth: '100px',
-  } as React.CSSProperties,
-  buttonGroup: {
-    display: 'flex',
-    gap: '8px',
-    flexWrap: 'wrap',
-    flex: 1,
-  } as React.CSSProperties,
-  joinButton: {
-    background: 'var(--btn-primary)',
-    color: 'white',
-    border: 'none',
-    borderRadius: '6px',
-    padding: '10px 16px',
-    fontSize: '12px',
-    fontWeight: '600',
-    cursor: 'pointer',
-    minWidth: '80px',
-    transition: 'background 0.2s ease',
-  } as React.CSSProperties,
-  leaveButton: {
-    background: 'transparent',
-    color: 'var(--text-primary)',
-    border: '1px solid var(--border-subtle)',
-    borderRadius: '6px',
-    padding: '10px 16px',
-    fontSize: '12px',
-    fontWeight: '600',
-    cursor: 'pointer',
-    minWidth: '80px',
-    transition: 'all 0.2s ease',
-  } as React.CSSProperties,
-  controlButton: {
-    background: 'transparent',
-    color: 'var(--text-muted)',
-    border: '1px solid var(--border-subtle)',
-    borderRadius: '6px',
-    padding: '10px 16px',
-    fontSize: '12px',
-    fontWeight: '600',
-    cursor: 'not-allowed',
-    opacity: 0.5,
-  } as React.CSSProperties,
-  logoutButton: {
-    background: 'rgba(239, 68, 68, 0.1)',
-    color: '#ef4444',
-    border: '1px solid #ef4444',
-    borderRadius: '6px',
-    padding: '10px 16px',
-    fontSize: '12px',
-    fontWeight: '600',
-    cursor: 'pointer',
-    minWidth: '80px',
-    transition: 'all 0.2s ease',
-  } as React.CSSProperties,
-  videoGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-    gap: '16px',
-    marginBottom: '24px',
-  } as React.CSSProperties,
-  videoTile: {
-    background: 'var(--bg-surface)',
-    border: '1px solid var(--border-subtle)',
-    borderRadius: '8px',
-    overflow: 'hidden',
-    display: 'flex',
-    flexDirection: 'column',
-  } as React.CSSProperties,
-  video: {
-    width: '100%',
-    aspectRatio: '16 / 9',
-    background: '#000',
-    display: 'block',
-  } as React.CSSProperties,
-  videoLabel: {
-    padding: '12px',
-    fontSize: '12px',
-    color: 'var(--text-muted)',
-    borderTop: '1px solid var(--border-subtle)',
-    background: 'var(--bg-input)',
-  } as React.CSSProperties,
-  audioGainSection: {
-    background: 'var(--bg-surface)',
-    border: '1px solid var(--border-subtle)',
-    borderRadius: '8px',
-    padding: '16px',
-    marginBottom: '16px',
-  } as React.CSSProperties,
-  sectionTitle: {
-    fontSize: '12px',
-    fontWeight: '600',
-    color: 'var(--text-primary)',
-    marginBottom: '12px',
-    textTransform: 'uppercase',
-    letterSpacing: '0.5px',
-  } as React.CSSProperties,
-  gainRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '12px',
-    padding: '8px 0',
-    fontSize: '12px',
-  } as React.CSSProperties,
-  gainLabel: {
-    color: 'var(--text-muted)',
-    minWidth: '150px',
-  } as React.CSSProperties,
-  slider: {
-    flex: 1,
-    height: '4px',
-    cursor: 'pointer',
-    background: 'var(--bg-input)',
-    border: 'none',
-    borderRadius: '2px',
-  } as React.CSSProperties,
-  networkSection: {
-    background: 'var(--network-bg)',
-    borderLeft: '4px solid var(--network-border)',
-    borderRadius: '4px',
-    padding: '12px',
-    marginBottom: '16px',
-  } as React.CSSProperties,
-  statRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    padding: '8px 0',
-    fontSize: '12px',
-    color: 'var(--text-muted)',
-    borderBottom: '1px solid var(--border-subtle)',
-  } as React.CSSProperties,
-  statsGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-    gap: '16px',
-  } as React.CSSProperties,
-  statsCard: {
-    background: 'var(--bg-surface)',
-    border: '1px solid var(--border-subtle)',
-    borderRadius: '8px',
-    padding: '16px',
-  } as React.CSSProperties,
-};
 
 export default MeetingPage;
