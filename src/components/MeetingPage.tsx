@@ -46,11 +46,19 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const [joined, setJoined] = useState<boolean>(false);
   const [peers, setPeers] = useState<PeersState>({});
   const [activeTab, setActiveTab] = useState<'meeting' | 'guide'>('meeting');
-  const [micEnabled, setMicEnabled] = useState<boolean>(true);
+  const [micInputEnabled, setMicInputEnabled] = useState<boolean>(true);
+  const [micOutputEnabled, setMicOutputEnabled] = useState<boolean>(true);
   const [cameraEnabled, setCameraEnabled] = useState<boolean>(true);
+  const [micBoost, setMicBoost] = useState<number>(1.0);
+  const [speakerBoost, setSpeakerBoost] = useState<number>(1.0);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
+  const audioDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const remoteAudioContextRef = useRef<AudioContext | null>(null);
+  const remoteGainNodesRef = useRef<WeakMap<HTMLVideoElement, GainNode>>(new WeakMap());
   const socketRef = useRef<TypedSocket | null>(null);
   const deviceRef = useRef<mediasoupClient.types.Device | null>(null);
   const sendTransportRef = useRef<mediasoupClient.types.Transport | null>(null);
@@ -243,20 +251,61 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     }
 
     localStreamRef.current = stream;
+
+    // Set up Web Audio API for microphone gain control
+    try {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const source = audioContext.createMediaStreamSource(stream);
+      const gainNode = audioContext.createGain();
+      const destination = audioContext.createMediaStreamDestination();
+
+      gainNode.gain.value = micBoost;
+      source.connect(gainNode);
+      gainNode.connect(destination);
+
+      audioContextRef.current = audioContext;
+      gainNodeRef.current = gainNode;
+      audioDestinationRef.current = destination;
+
+      // Create a new stream with processed audio and original video
+      // The destination.stream has the processed audio with gain applied
+      const processedAudioTrack = destination.stream.getAudioTracks()[0];
+      const videoTracks = stream.getVideoTracks();
+
+      if (processedAudioTrack && videoTracks.length > 0) {
+        const processedStream = new MediaStream();
+        processedStream.addTrack(videoTracks[0]);
+        processedStream.addTrack(processedAudioTrack);
+        return processedStream;
+      }
+    } catch (error) {
+      console.warn('Web Audio API not available for microphone gain:', error);
+    }
+
     return stream;
   };
 
-  const handleMicToggle = (): void => {
-    if (!localStreamRef.current) return;
+  const handleMicInputToggle = (): void => {
+    // Mute/unmute what the user hears from their own microphone (local loopback)
+    if (localVideoRef.current) {
+      const newState = !micInputEnabled;
+      // When INPUT is ON (newState=true), muted=false (user hears audio)
+      // When INPUT is OFF (newState=false), muted=true (user doesn't hear audio)
+      localVideoRef.current.muted = !newState;
+      setMicInputEnabled(newState);
+    }
+  };
 
-    const audioTracks = localStreamRef.current.getAudioTracks();
-    const newState = !micEnabled;
+  const handleMicOutputToggle = (): void => {
+    // Mute/unmute what others hear from the user's microphone
+    // By setting gain to 0 when muted, controlled through the gain node
+    const newState = !micOutputEnabled;
+    setMicOutputEnabled(newState);
 
-    audioTracks.forEach((track) => {
-      track.enabled = newState;
-    });
-
-    setMicEnabled(newState);
+    // Apply the gain: if output is OFF, set to 0; if ON, use the current mic boost
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = newState ? micBoost : 0;
+    }
   };
 
   const handleCameraToggle = (): void => {
@@ -270,6 +319,42 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     });
 
     setCameraEnabled(newState);
+  };
+
+  const handleMicBoostChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
+    const boost = parseFloat(e.target.value);
+    setMicBoost(boost);
+
+    // Apply gain to Web Audio API, but only if mic output is enabled
+    // If output is OFF, keep gain at 0 (muted)
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = micOutputEnabled ? boost : 0;
+    }
+  };
+
+  const handleSpeakerBoostChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
+    const boost = parseFloat(e.target.value);
+    setSpeakerBoost(boost);
+
+    // Update Web Audio API gain nodes for remote videos
+    const remoteVideos = document.querySelectorAll('[data-remote-video]');
+    remoteVideos.forEach((videoEl) => {
+      const video = videoEl as HTMLVideoElement;
+      const gainNode = remoteGainNodesRef.current.get(video);
+
+      if (gainNode) {
+        // Use GainNode for amplification (supports values > 1.0)
+        gainNode.gain.value = boost;
+      } else {
+        // Fallback if GainNode not available: clamp to [0, 1]
+        video.volume = Math.min(boost, 1);
+      }
+    });
+
+    // Also apply to local video for consistency
+    if (localVideoRef.current) {
+      localVideoRef.current.volume = Math.min(boost, 1);
+    }
   };
 
   const handleJoin = async (): Promise<void> => {
@@ -467,8 +552,20 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     }
 
     localStreamRef.current = null;
-    setMicEnabled(true);
+    setMicInputEnabled(true);
+    setMicOutputEnabled(true);
     setCameraEnabled(true);
+    setMicBoost(1.0);
+    setSpeakerBoost(1.0);
+
+    // Clean up audio context
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    gainNodeRef.current = null;
+    audioDestinationRef.current = null;
+
     setPeers({});
     setJoined(false);
 
@@ -556,17 +653,30 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
               </button>
             )}
             <button
-              onClick={handleMicToggle}
+              onClick={handleMicInputToggle}
               disabled={!joined}
               style={{
                 ...styles.controlButton,
                 cursor: joined ? 'pointer' : 'not-allowed',
-                opacity: micEnabled ? 1 : 0.6,
-                borderColor: !micEnabled && joined ? '#ff6b6b' : undefined,
-                borderWidth: !micEnabled && joined ? '2px' : undefined,
+                opacity: micInputEnabled ? 1 : 0.6,
+                borderColor: !micInputEnabled && joined ? '#ff6b6b' : undefined,
+                borderWidth: !micInputEnabled && joined ? '2px' : undefined,
               }}
             >
-              {micEnabled ? 'MIC ON' : 'MIC OFF'}
+              {micInputEnabled ? 'INPUT' : 'INPUT OFF'}
+            </button>
+            <button
+              onClick={handleMicOutputToggle}
+              disabled={!joined}
+              style={{
+                ...styles.controlButton,
+                cursor: joined ? 'pointer' : 'not-allowed',
+                opacity: micOutputEnabled ? 1 : 0.6,
+                borderColor: !micOutputEnabled && joined ? '#ff6b6b' : undefined,
+                borderWidth: !micOutputEnabled && joined ? '2px' : undefined,
+              }}
+            >
+              {micOutputEnabled ? 'OUTPUT' : 'OUTPUT OFF'}
             </button>
             <button
               onClick={handleCameraToggle}
@@ -606,10 +716,61 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
               <div key={id} style={styles.videoTile}>
                 <video
                   ref={(el) => {
-                    if (el) el.srcObject = peerInfo.stream;
+                    if (el && peerInfo.stream) {
+                      el.srcObject = peerInfo.stream;
+
+                      // Set up Web Audio API for remote audio processing to support gains > 1.0
+                      if (!remoteGainNodesRef.current.has(el)) {
+                        // Initialize remote audio context if not already done
+                        if (!remoteAudioContextRef.current) {
+                          remoteAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+                        }
+
+                        const audioContext = remoteAudioContextRef.current;
+                        const audioTracks = peerInfo.stream.getAudioTracks();
+
+                        if (audioTracks.length > 0) {
+                          try {
+                            // Create audio processing chain
+                            const source = audioContext.createMediaStreamSource(peerInfo.stream);
+                            const gainNode = audioContext.createGain();
+                            gainNode.gain.value = speakerBoost;
+
+                            const destination = audioContext.createMediaStreamDestination();
+
+                            // Connect: source -> gain -> destination
+                            source.connect(gainNode);
+                            gainNode.connect(destination);
+
+                            // Store the gain node for later updates
+                            remoteGainNodesRef.current.set(el, gainNode);
+
+                            // Use the processed stream with video and processed audio
+                            const processedStream = new MediaStream();
+                            peerInfo.stream.getVideoTracks().forEach(track => {
+                              processedStream.addTrack(track);
+                            });
+                            destination.stream.getAudioTracks().forEach(track => {
+                              processedStream.addTrack(track);
+                            });
+
+                            el.srcObject = processedStream;
+                            el.volume = 1; // Set to 1 since gain is controlled via GainNode
+                          } catch (error) {
+                            // Fallback if Web Audio API fails
+                            console.warn('Web Audio API setup failed for remote audio, using direct volume control:', error);
+                            el.volume = Math.min(speakerBoost, 1);
+                          }
+                        } else {
+                          // No audio tracks, just set volume normally
+                          el.volume = Math.min(speakerBoost, 1);
+                        }
+                      }
+                    }
                   }}
                   autoPlay
                   playsInline
+                  data-remote-video
                   style={styles.video}
                 />
                 <div style={styles.videoLabel}>
@@ -623,12 +784,28 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         <div style={styles.audioGainSection}>
           <div style={styles.sectionTitle}>Audio Gain</div>
           <div style={styles.gainRow}>
-            <span style={styles.gainLabel}>Mic Boost: 1.00x</span>
-            <input type="range" disabled style={styles.slider} min="0" max="100" defaultValue="50" />
+            <span style={styles.gainLabel}>Mic Boost: {micBoost.toFixed(2)}x</span>
+            <input
+              type="range"
+              style={styles.slider}
+              min="0"
+              max="2.5"
+              step="0.1"
+              value={micBoost}
+              onChange={handleMicBoostChange}
+            />
           </div>
           <div style={styles.gainRow}>
-            <span style={styles.gainLabel}>Speaker Boost: 1.00x</span>
-            <input type="range" disabled style={styles.slider} min="0" max="100" defaultValue="50" />
+            <span style={styles.gainLabel}>Speaker Boost: {speakerBoost.toFixed(2)}x</span>
+            <input
+              type="range"
+              style={styles.slider}
+              min="0"
+              max="2.5"
+              step="0.1"
+              value={speakerBoost}
+              onChange={handleSpeakerBoostChange}
+            />
           </div>
         </div>
 
