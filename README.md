@@ -6,6 +6,7 @@ mediasoup-client 기반의 다자간 화상회의 웹 클라이언트입니다.
 
 | 항목 | 기술 |
 |------|------|
+| 언어 | TypeScript |
 | UI 프레임워크 | React 18 |
 | WebRTC 클라이언트 | mediasoup-client ^3.18.0 |
 | 실시간 통신 | Socket.IO Client ^4.7.2 |
@@ -30,20 +31,22 @@ mediasoup-client 기반의 다자간 화상회의 웹 클라이언트입니다.
 ```
 frontend/
 ├── src/
-│   ├── main.jsx          # 엔트리 포인트
-│   └── App.jsx           # 메인 컴포넌트 (모든 화상회의 로직)
+│   ├── main.tsx          # 엔트리 포인트
+│   └── App.tsx           # 메인 컴포넌트 (모든 화상회의 로직)
 ├── index.html            # HTML 템플릿
-├── vite.config.js        # Vite 설정
+├── vite.config.ts        # Vite 설정
+├── tsconfig.json         # TypeScript 설정
+├── tsconfig.node.json    # Vite TypeScript 설정
 └── package.json
 ```
 
 ## 환경 설정
 
-`App.jsx` 내 서버 주소 설정:
+`App.tsx` 내 서버 주소 설정:
 
-```javascript
-const SIGNALING_SERVER = 'http://localhost:3000';  // 시그널링 서버
-const ICE_SERVERS = [
+```typescript
+const SIGNALING_SERVER: string = 'http://localhost:3000';  // 시그널링 서버
+const ICE_SERVERS: IceServerConfig[] = [
   { urls: 'stun:127.0.0.1:3478' },                // STUN 서버
   { urls: 'turn:127.0.0.1:3478', username: 'user1', credential: 'pass1' }  // TURN 서버
 ];
@@ -54,6 +57,13 @@ const ICE_SERVERS = [
 ```bash
 npm install
 npm run dev
+```
+
+## TypeScript 타입 체크
+
+```bash
+npm run type-check  # 타입 에러 검사
+npm run build        # 프로덕션 빌드 (타입 체크 포함)
 ```
 
 ## 동작 흐름
