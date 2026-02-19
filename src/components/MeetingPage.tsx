@@ -46,8 +46,9 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const [joined, setJoined] = useState<boolean>(false);
   const [peers, setPeers] = useState<PeersState>({});
   const [activeTab, setActiveTab] = useState<'meeting' | 'guide'>('meeting');
-  const [micEnabled, setMicEnabled] = useState<boolean>(true);
   const [cameraEnabled, setCameraEnabled] = useState<boolean>(true);
+  const [micInputEnabled, setMicInputEnabled] = useState<boolean>(true);
+  const [speakerEnabled, setSpeakerEnabled] = useState<boolean>(true);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -246,18 +247,50 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     return stream;
   };
 
-  const handleMicToggle = (): void => {
-    if (!localStreamRef.current) return;
+  const handleMicInputToggle = (): void => {
+    // MICROPHONE INPUT = whether this user's microphone audio is being sent to other users
+    // This controls the audio producer that sends audio to other users
+    const newState = !micInputEnabled;
 
-    const audioTracks = localStreamRef.current.getAudioTracks();
-    const newState = !micEnabled;
+    console.log(`[Mic Input] Toggling from ${micInputEnabled} to ${newState}`);
 
-    audioTracks.forEach((track) => {
-      track.enabled = newState;
+    if (producerRef.current?.audio) {
+      if (newState) {
+        // Resume sending audio to other users
+        console.log('[Mic Input] Resuming audio producer');
+        producerRef.current.audio.resume();
+      } else {
+        // Pause sending audio to other users
+        console.log('[Mic Input] Pausing audio producer');
+        producerRef.current.audio.pause();
+      }
+    } else {
+      console.warn('[Mic Input] Audio producer not found');
+    }
+
+    setMicInputEnabled(newState);
+  };
+
+  const handleSpeakerToggle = (): void => {
+    // SPEAKER = whether this user can hear audio from other users
+    // This controls whether remote audio tracks are playing
+    const newState = !speakerEnabled;
+
+    console.log(`[Speaker] Toggling from ${speakerEnabled} to ${newState}, peers count: ${Object.keys(peers).length}`);
+
+    Object.entries(peers).forEach(([peerId, peerInfo]) => {
+      const audioTracks = peerInfo.stream.getAudioTracks();
+      console.log(`[Speaker] Peer ${peerId}: ${audioTracks.length} audio track(s)`);
+      audioTracks.forEach((track) => {
+        console.log(`[Speaker] Setting audio track enabled: ${newState}`);
+        track.enabled = newState;
+      });
     });
 
-    setMicEnabled(newState);
+    setSpeakerEnabled(newState);
   };
+
+
 
   const handleCameraToggle = (): void => {
     if (!localStreamRef.current) return;
@@ -393,7 +426,11 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       socketRef.current.on(
         'newConsumer',
         async ({ producerId, id, kind, userId: peerUserId, userName: peerUserName }) => {
+          console.log(`[newConsumer] Received ${kind} consumer from peer ${id}`);
+
+          // Step 1: Create transport if it doesn't exist
           if (!consumerTransportsRef.current[id]) {
+            console.log(`[newConsumer] Creating new receive transport for peer ${id}`);
             const recvTransportData = await new Promise<TransportData>((resolve) =>
               socketRef.current?.emit('create-web-rtc-transport', { direction: 'recv' }, resolve)
             );
@@ -412,30 +449,46 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
             });
 
             consumerTransportsRef.current[id] = recvTransport;
-
-            const consumerData = await new Promise<ConsumerData>((resolve) =>
-              socketRef.current?.emit('consume', { transportId: recvTransport.id, producerId, kind }, resolve)
-            );
-
-            const consumer = await recvTransport.consume({
-              id: consumerData.id,
-              producerId,
-              kind: consumerData.kind,
-              rtpParameters: consumerData.rtpParameters,
-            });
-
-            const newStream = new MediaStream();
-            newStream.addTrack(consumer.track);
-
-            setPeers((prev) => ({
-              ...prev,
-              [id]: {
-                stream: newStream,
-                userId: peerUserId,
-                userName: peerUserName,
-              },
-            }));
           }
+
+          // Step 2: Create and consume the track (happens for every consumer, not just the first)
+          const recvTransport = consumerTransportsRef.current[id];
+          const consumerData = await new Promise<ConsumerData>((resolve) =>
+            socketRef.current?.emit('consume', { transportId: recvTransport.id, producerId, kind }, resolve)
+          );
+
+          const consumer = await recvTransport.consume({
+            id: consumerData.id,
+            producerId,
+            kind: consumerData.kind,
+            rtpParameters: consumerData.rtpParameters,
+          });
+
+          console.log(`[newConsumer] Consumer created for ${kind}, adding track to peer ${id}`);
+
+          // Step 3: Add track to peer's stream (or create new stream if first consumer)
+          setPeers((prev) => {
+            const existingPeer = prev[id];
+            if (existingPeer) {
+              // Add track to existing stream
+              existingPeer.stream.addTrack(consumer.track);
+              console.log(`[newConsumer] Added ${kind} track to existing stream`);
+              return prev;
+            } else {
+              // Create new stream with first track
+              const newStream = new MediaStream();
+              newStream.addTrack(consumer.track);
+              console.log(`[newConsumer] Created new stream with ${kind} track`);
+              return {
+                ...prev,
+                [id]: {
+                  stream: newStream,
+                  userId: peerUserId,
+                  userName: peerUserName,
+                },
+              };
+            }
+          });
         }
       );
 
@@ -467,7 +520,9 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     }
 
     localStreamRef.current = null;
-    setMicEnabled(true);
+    setMicInputEnabled(true);
+    setSpeakerEnabled(true);
+
     setCameraEnabled(true);
     setPeers({});
     setJoined(false);
@@ -555,19 +610,35 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
                 LEAVE
               </button>
             )}
+
             <button
-              onClick={handleMicToggle}
+              onClick={handleMicInputToggle}
               disabled={!joined}
               style={{
                 ...styles.controlButton,
                 cursor: joined ? 'pointer' : 'not-allowed',
-                opacity: micEnabled ? 1 : 0.6,
-                borderColor: !micEnabled && joined ? '#ff6b6b' : undefined,
-                borderWidth: !micEnabled && joined ? '2px' : undefined,
+                opacity: micInputEnabled ? 1 : 0.6,
+                borderColor: !micInputEnabled && joined ? '#ff6b6b' : undefined,
+                borderWidth: !micInputEnabled && joined ? '2px' : undefined,
               }}
             >
-              {micEnabled ? 'MIC ON' : 'MIC OFF'}
+              {micInputEnabled ? 'MICROPHONE ON' : 'MICROPHONE OFF'}
             </button>
+
+            <button
+              onClick={handleSpeakerToggle}
+              disabled={!joined}
+              style={{
+                ...styles.controlButton,
+                cursor: joined ? 'pointer' : 'not-allowed',
+                opacity: speakerEnabled ? 1 : 0.6,
+                borderColor: !speakerEnabled && joined ? '#ff6b6b' : undefined,
+                borderWidth: !speakerEnabled && joined ? '2px' : undefined,
+              }}
+            >
+              {speakerEnabled ? 'SPEAKER ON' : 'SPEAKER OFF'}
+            </button>
+
             <button
               onClick={handleCameraToggle}
               disabled={!joined}
