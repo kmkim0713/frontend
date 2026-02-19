@@ -42,7 +42,7 @@ const ICE_SERVERS: IceServerConfig[] = [
 
 const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   
-  const [meetingId, setMeetingId] = useState<string>('');
+  const [meetingId, setMeetingId] = useState<string>('test-room');
   const [joined, setJoined] = useState<boolean>(false);
   const [peers, setPeers] = useState<PeersState>({});
   const [activeTab, setActiveTab] = useState<'meeting' | 'guide'>('meeting');
@@ -76,10 +76,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const localResolutionRef = useRef<HTMLSpanElement>(null);
 
   const collectStats = async () => {
-    if (!sendTransportRef.current) return;
-
-    const stats = await sendTransportRef.current.getStats();
-
     let sendBitrate = '-';
     let sendRTT = '-';
     let sendLoss = '-';
@@ -88,67 +84,106 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     let receiveLoss = '-';
     let localResolution = '-';
 
-    stats.forEach((report: any) => {
-      // ---------- SEND ----------
-      if (report.type === 'outbound-rtp' && report.kind === 'video') {
-        if (lastSendRef.current) {
-          const bitrate =
-            ((report.bytesSent - lastSendRef.current.bytes) * 8) /
-            ((report.timestamp - lastSendRef.current.timestamp) / 1000);
+    // Get stats from send transport
+    if (sendTransportRef.current) {
+      const sendStats = await sendTransportRef.current.getStats();
 
-          sendBitrate = `${Math.floor(bitrate / 1000)} kbps`;
+      sendStats.forEach((report: any) => {
+        // ---------- SEND ----------
+        if (report.type === 'outbound-rtp' && report.kind === 'video') {
+          if (lastSendRef.current) {
+            const bitrate =
+              ((report.bytesSent - lastSendRef.current.bytes) * 8) /
+              ((report.timestamp - lastSendRef.current.timestamp) / 1000);
+
+            sendBitrate = `${Math.floor(bitrate / 1000)} kbps`;
+          }
+
+          lastSendRef.current = {
+            bytes: report.bytesSent,
+            timestamp: report.timestamp,
+          };
+
+          // Calculate packet loss - handle case where packetsLost might be 0
+          if (report.packetsSent !== undefined) {
+            const packetsLost = report.packetsLost || 0;
+            const total = report.packetsSent + packetsLost;
+            const loss = total > 0 ? (packetsLost / total) * 100 : 0;
+            sendLoss = `${loss.toFixed(2)} %`;
+          }
+
+          // Get local resolution from outbound-rtp stats
+          if (report.frameWidth && report.frameHeight) {
+            localResolution = `${report.frameWidth}x${report.frameHeight}`;
+          }
         }
 
-        lastSendRef.current = {
-          bytes: report.bytesSent,
-          timestamp: report.timestamp,
-        };
+        // ---------- RTT (from candidate-pair stats) ----------
+        // RTT is available in active candidate-pair stats
+        if (report.type === 'candidate-pair') {
+          // Check for RTT in either currentRoundTripTime or roundTripTime property
+          const rttSeconds = report.currentRoundTripTime ?? report.roundTripTime;
 
-        if (report.packetsSent && report.packetsLost !== undefined) {
-          const total = report.packetsSent + report.packetsLost;
-          const loss = total > 0 ? (report.packetsLost / total) * 100 : 0;
-          sendLoss = `${loss.toFixed(2)} %`;
+          // RTT should be available when state is 'succeeded' or connection is active
+          // Also check that RTT is a valid positive number
+          if (rttSeconds !== undefined && rttSeconds !== null && typeof rttSeconds === 'number' && rttSeconds > 0) {
+            const rttMs = rttSeconds * 1000;
+            sendRTT = `${rttMs.toFixed(1)} ms`;
+            receiveRTT = `${rttMs.toFixed(1)} ms`;
+          }
+        }
+      });
+    }
+
+    // Get stats from receive transports to calculate receive bitrate and loss
+    const receiveTransports = Object.values(consumerTransportsRef.current);
+    if (receiveTransports.length > 0) {
+      // Aggregate stats from all receive transports
+      let totalBytesReceived = 0;
+      let totalPacketsReceived = 0;
+      let totalPacketsLost = 0;
+      let latestTimestamp = 0;
+
+      for (const recvTransport of receiveTransports) {
+        const recvStats = await recvTransport.getStats();
+
+        recvStats.forEach((report: any) => {
+          // ---------- RECEIVE ----------
+          if (report.type === 'inbound-rtp' && report.kind === 'video') {
+            totalBytesReceived += report.bytesReceived || 0;
+            totalPacketsReceived += report.packetsReceived || 0;
+            totalPacketsLost += report.packetsLost || 0;
+            latestTimestamp = Math.max(latestTimestamp, report.timestamp || 0);
+          }
+        });
+      }
+
+      // Calculate receive bitrate from aggregated data
+      if (totalBytesReceived > 0 && lastRecvRef.current) {
+        const timeDiffMs = latestTimestamp - lastRecvRef.current.timestamp;
+        if (timeDiffMs > 0) {
+          const bitrate = ((totalBytesReceived - lastRecvRef.current.bytes) * 8) / (timeDiffMs / 1000);
+          if (isFinite(bitrate) && bitrate >= 0) {
+            receiveBitrate = `${Math.floor(bitrate / 1000)} kbps`;
+          }
         }
       }
 
-      // ---------- RECEIVE ----------
-      if (report.type === 'inbound-rtp' && report.kind === 'video') {
-        if (lastRecvRef.current) {
-          const bitrate =
-            ((report.bytesReceived - lastRecvRef.current.bytes) * 8) /
-            ((report.timestamp - lastRecvRef.current.timestamp) / 1000);
-
-          receiveBitrate = `${Math.floor(bitrate / 1000)} kbps`;
-        }
-
+      // Update last receive stats
+      if (totalBytesReceived > 0) {
         lastRecvRef.current = {
-          bytes: report.bytesReceived,
-          timestamp: report.timestamp,
+          bytes: totalBytesReceived,
+          timestamp: latestTimestamp,
         };
-
-        if (report.packetsReceived && report.packetsLost !== undefined) {
-          const total = report.packetsReceived + report.packetsLost;
-          const loss = total > 0 ? (report.packetsLost / total) * 100 : 0;
-          receiveLoss = `${loss.toFixed(2)} %`;
-        }
       }
 
-      // ---------- RTT ----------
-      if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-        if (report.currentRoundTripTime) {
-          const rtt = report.currentRoundTripTime * 1000;
-          sendRTT = `${rtt.toFixed(1)} ms`;
-          receiveRTT = `${rtt.toFixed(1)} ms`;
-        }
+      // Calculate aggregated packet loss
+      if (totalPacketsReceived > 0) {
+        const total = totalPacketsReceived + totalPacketsLost;
+        const loss = total > 0 ? (totalPacketsLost / total) * 100 : 0;
+        receiveLoss = `${loss.toFixed(2)} %`;
       }
-
-      // ---------- RESOLUTION ----------
-      if (report.type === 'track' && report.kind === 'video') {
-        if (report.frameWidth && report.frameHeight) {
-          localResolution = `${report.frameWidth}x${report.frameHeight}`;
-        }
-      }
-    });
+    }
 
     // Update refs directly to avoid triggering a component re-render that causes video flicker
     // Refs allow us to update the DOM without re-rendering the video elements
@@ -176,7 +211,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
     const interval = setInterval(() => {
       collectStats();
-    }, 5000);
+    }, 2000);
 
     return () => clearInterval(interval);
   }, [joined]);
@@ -571,9 +606,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
             </div>
             <div style={styles.statRow}>
               <span>Receive Loss: <span ref={receiveLossRef}>-</span></span>
-            </div>
-            <div style={styles.statRow}>
-              <span>Receive Loss: -</span>
             </div>
             <div style={styles.statRow}>
               <span>Local: <span ref={localResolutionRef}>-</span></span>
