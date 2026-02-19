@@ -278,13 +278,31 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
     console.log(`[Speaker] Toggling from ${speakerEnabled} to ${newState}, peers count: ${Object.keys(peers).length}`);
 
+    // Method 1: Disable/enable audio tracks at the MediaStream level
     Object.entries(peers).forEach(([peerId, peerInfo]) => {
       const audioTracks = peerInfo.stream.getAudioTracks();
       console.log(`[Speaker] Peer ${peerId}: ${audioTracks.length} audio track(s)`);
-      audioTracks.forEach((track) => {
-        console.log(`[Speaker] Setting audio track enabled: ${newState}`);
+      audioTracks.forEach((track, idx) => {
+        console.log(`[Speaker] Setting audio track ${idx} enabled: ${newState}`);
         track.enabled = newState;
       });
+    });
+
+    // Method 2: Also control video element volume as a fallback
+    // This ensures the audio is muted even if track.enabled alone doesn't work
+    const remoteVideos = document.querySelectorAll('[data-remote-video]');
+    console.log(`[Speaker] Found ${remoteVideos.length} remote video elements`);
+    remoteVideos.forEach((videoEl) => {
+      const video = videoEl as HTMLVideoElement;
+      if (newState) {
+        // Speaker ON: restore volume to 1
+        video.volume = 1;
+        console.log('[Speaker] Set video volume to 1');
+      } else {
+        // Speaker OFF: mute by setting volume to 0
+        video.volume = 0;
+        console.log('[Speaker] Set video volume to 0');
+      }
     });
 
     setSpeakerEnabled(newState);
@@ -681,6 +699,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
                   }}
                   autoPlay
                   playsInline
+                  data-remote-video
                   style={styles.video}
                 />
                 <div style={styles.videoLabel}>
