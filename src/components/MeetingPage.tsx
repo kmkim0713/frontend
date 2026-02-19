@@ -49,6 +49,8 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const [cameraEnabled, setCameraEnabled] = useState<boolean>(true);
   const [micInputEnabled, setMicInputEnabled] = useState<boolean>(true);
   const [speakerEnabled, setSpeakerEnabled] = useState<boolean>(true);
+  const [micInputVolume, setMicInputVolume] = useState<number>(1.0);
+  const [speakerVolume, setSpeakerVolume] = useState<number>(1.0);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -59,6 +61,15 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const consumerTransportsRef = useRef<ConsumerTransportsRef>({});
   const currentMeetingIdRef = useRef<string | null>(null);
   const [resolution, setResolution] = useState<'360p' | '480p' | '720p'>('360p');
+
+  // Web Audio API for microphone gain control
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const micGainNodeRef = useRef<GainNode | null>(null);
+  const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+
+  // Web Audio API for speaker gain control
+  const speakerAudioContextRef = useRef<AudioContext | null>(null);
+  const speakerGainNodesRef = useRef<WeakMap<MediaStream, GainNode>>(new WeakMap());
 
   const cameraStatsRef = useRef<CameraStats>({
     sendBitrate: '-',
@@ -244,41 +255,99 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     }
 
     localStreamRef.current = stream;
+
+    // Set up Web Audio API for microphone gain control
+    try {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+
+      // Resume audio context if suspended
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+
+      // Create audio source from the original stream
+      const source = audioContext.createMediaStreamSource(stream);
+
+      // Create gain node for controlling microphone volume
+      const gainNode = audioContext.createGain();
+      gainNode.gain.value = micInputVolume;
+
+      // Create a destination to capture processed audio
+      const destination = audioContext.createMediaStreamDestination();
+
+      // Connect: source -> gainNode -> destination
+      source.connect(gainNode);
+      gainNode.connect(destination);
+
+      // Store references for later control
+      audioContextRef.current = audioContext;
+      micGainNodeRef.current = gainNode;
+      micSourceRef.current = source;
+
+      console.log('[startLocalStream] Web Audio API setup completed for microphone');
+
+      // Return the processed stream with gain control applied
+      const processedStream = destination.stream;
+      const videoTracks = stream.getVideoTracks();
+      const audioTracks = processedStream.getAudioTracks();
+
+      if (audioTracks.length > 0 && videoTracks.length > 0) {
+        const finalStream = new MediaStream();
+        finalStream.addTrack(videoTracks[0]);
+        finalStream.addTrack(audioTracks[0]);
+        return finalStream;
+      }
+    } catch (error) {
+      console.warn('[startLocalStream] Web Audio API not available:', error);
+    }
+
     return stream;
   };
 
   const handleMicInputToggle = (): void => {
     // MICROPHONE INPUT = whether this user's microphone audio is being sent to other users
-    // This controls the audio producer that sends audio to other users
+    // This controls the gain of the microphone audio through Web Audio API
     const newState = !micInputEnabled;
 
     console.log(`[Mic Input] Toggling from ${micInputEnabled} to ${newState}`);
 
-    if (producerRef.current?.audio) {
+    if (micGainNodeRef.current) {
+      // Use GainNode to control microphone audio
+      // When OFF (newState=false): set gain to 0 (mute)
+      // When ON (newState=true): set gain to current volume level
       if (newState) {
-        // Resume sending audio to other users
-        console.log('[Mic Input] Resuming audio producer');
-        producerRef.current.audio.resume();
+        micGainNodeRef.current.gain.value = micInputVolume;
+        console.log(`[Mic Input] Enabled with volume: ${micInputVolume}`);
       } else {
-        // Pause sending audio to other users
-        console.log('[Mic Input] Pausing audio producer');
-        producerRef.current.audio.pause();
+        micGainNodeRef.current.gain.value = 0;
+        console.log('[Mic Input] Disabled (gain = 0)');
       }
     } else {
-      console.warn('[Mic Input] Audio producer not found');
+      console.warn('[Mic Input] Mic GainNode not found');
     }
 
     setMicInputEnabled(newState);
   };
 
+  const handleMicInputVolumeChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
+    const volume = parseFloat(e.target.value);
+    setMicInputVolume(volume);
+
+    // Apply the volume to the GainNode
+    if (micGainNodeRef.current && micInputEnabled) {
+      micGainNodeRef.current.gain.value = volume;
+      console.log(`[Mic Volume] Changed to ${volume.toFixed(2)}`);
+    }
+  };
+
   const handleSpeakerToggle = (): void => {
     // SPEAKER = whether this user can hear audio from other users
-    // This controls whether remote audio tracks are playing
+    // This controls the gain of remote audio through Web Audio API
     const newState = !speakerEnabled;
 
     console.log(`[Speaker] Toggling from ${speakerEnabled} to ${newState}, peers count: ${Object.keys(peers).length}`);
 
-    // Method 1: Disable/enable audio tracks at the MediaStream level
+    // Disable/enable audio tracks at the MediaStream level
     Object.entries(peers).forEach(([peerId, peerInfo]) => {
       const audioTracks = peerInfo.stream.getAudioTracks();
       console.log(`[Speaker] Peer ${peerId}: ${audioTracks.length} audio track(s)`);
@@ -288,16 +357,15 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       });
     });
 
-    // Method 2: Also control video element volume as a fallback
-    // This ensures the audio is muted even if track.enabled alone doesn't work
+    // Also control video element volume as a fallback
     const remoteVideos = document.querySelectorAll('[data-remote-video]');
     console.log(`[Speaker] Found ${remoteVideos.length} remote video elements`);
     remoteVideos.forEach((videoEl) => {
       const video = videoEl as HTMLVideoElement;
       if (newState) {
-        // Speaker ON: restore volume to 1
-        video.volume = 1;
-        console.log('[Speaker] Set video volume to 1');
+        // Speaker ON: restore volume to current level
+        video.volume = speakerVolume;
+        console.log(`[Speaker] Set video volume to ${speakerVolume}`);
       } else {
         // Speaker OFF: mute by setting volume to 0
         video.volume = 0;
@@ -306,6 +374,22 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     });
 
     setSpeakerEnabled(newState);
+  };
+
+  const handleSpeakerVolumeChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
+    const volume = parseFloat(e.target.value);
+    setSpeakerVolume(volume);
+
+    console.log(`[Speaker Volume] Changed to ${volume.toFixed(2)}`);
+
+    // Apply the volume to all remote video elements
+    if (speakerEnabled) {
+      const remoteVideos = document.querySelectorAll('[data-remote-video]');
+      remoteVideos.forEach((videoEl) => {
+        const video = videoEl as HTMLVideoElement;
+        video.volume = volume;
+      });
+    }
   };
 
 
@@ -537,9 +621,25 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       stream.getTracks().forEach((track: MediaStreamTrack) => track.stop());
     }
 
+    // Clean up Web Audio API contexts
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    micGainNodeRef.current = null;
+    micSourceRef.current = null;
+
+    if (speakerAudioContextRef.current) {
+      speakerAudioContextRef.current.close();
+      speakerAudioContextRef.current = null;
+    }
+    speakerGainNodesRef.current = new WeakMap();
+
     localStreamRef.current = null;
     setMicInputEnabled(true);
     setSpeakerEnabled(true);
+    setMicInputVolume(1.0);
+    setSpeakerVolume(1.0);
 
     setCameraEnabled(true);
     setPeers({});
@@ -713,12 +813,30 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         <div style={styles.audioGainSection}>
           <div style={styles.sectionTitle}>Audio Gain</div>
           <div style={styles.gainRow}>
-            <span style={styles.gainLabel}>Mic Boost: 1.00x</span>
-            <input type="range" disabled style={styles.slider} min="0" max="100" defaultValue="50" />
+            <span style={styles.gainLabel}>Mic Boost: {micInputVolume.toFixed(2)}x</span>
+            <input
+              type="range"
+              style={styles.slider}
+              min="0"
+              max="2.5"
+              step="0.1"
+              value={micInputVolume}
+              onChange={handleMicInputVolumeChange}
+              disabled={!joined}
+            />
           </div>
           <div style={styles.gainRow}>
-            <span style={styles.gainLabel}>Speaker Boost: 1.00x</span>
-            <input type="range" disabled style={styles.slider} min="0" max="100" defaultValue="50" />
+            <span style={styles.gainLabel}>Speaker Boost: {speakerVolume.toFixed(2)}x</span>
+            <input
+              type="range"
+              style={styles.slider}
+              min="0"
+              max="2.5"
+              step="0.1"
+              value={speakerVolume}
+              onChange={handleSpeakerVolumeChange}
+              disabled={!joined}
+            />
           </div>
         </div>
 
