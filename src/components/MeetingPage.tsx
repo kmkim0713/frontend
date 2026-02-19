@@ -1,4 +1,4 @@
-import { useState, useRef, FC } from 'react';
+import { useState, useRef, FC, useEffect } from 'react';
 import io from 'socket.io-client';
 import * as mediasoupClient from 'mediasoup-client';
 import type {
@@ -17,6 +17,17 @@ interface MeetingPageProps {
   user: User;
   onLeaveApp: () => void;
 }
+
+interface CameraStats {
+  sendBitrate: string;
+  sendRTT: string;
+  sendLoss: string;
+  receiveBitrate: string;
+  receiveRTT: string;
+  receiveLoss: string;
+  local: string;
+}
+
 
 const SIGNALING_SERVER: string = import.meta.env.VITE_SIGNALING_SERVER;
 const ICE_SERVERS: IceServerConfig[] = [
@@ -44,6 +55,132 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const consumerTransportsRef = useRef<ConsumerTransportsRef>({});
   const currentMeetingIdRef = useRef<string | null>(null);
   const [resolution, setResolution] = useState<'360p' | '480p' | '720p'>('360p');
+
+  const cameraStatsRef = useRef<CameraStats>({
+    sendBitrate: '-',
+    sendRTT: '-',
+    sendLoss: '-',
+    receiveBitrate: '-',
+    receiveRTT: '-',
+    receiveLoss: '-',
+    local: '-',
+  });
+  const lastSendRef = useRef<{ bytes: number; timestamp: number } | null>(null);
+  const lastRecvRef = useRef<{ bytes: number; timestamp: number } | null>(null);
+  const sendBitrateRef = useRef<HTMLSpanElement>(null);
+  const sendRTTRef = useRef<HTMLSpanElement>(null);
+  const sendLossRef = useRef<HTMLSpanElement>(null);
+  const receiveBitrateRef = useRef<HTMLSpanElement>(null);
+  const receiveRTTRef = useRef<HTMLSpanElement>(null);
+  const receiveLossRef = useRef<HTMLSpanElement>(null);
+  const localResolutionRef = useRef<HTMLSpanElement>(null);
+
+  const collectStats = async () => {
+    if (!sendTransportRef.current) return;
+
+    const stats = await sendTransportRef.current.getStats();
+
+    let sendBitrate = '-';
+    let sendRTT = '-';
+    let sendLoss = '-';
+    let receiveBitrate = '-';
+    let receiveRTT = '-';
+    let receiveLoss = '-';
+    let localResolution = '-';
+
+    stats.forEach((report: any) => {
+      // ---------- SEND ----------
+      if (report.type === 'outbound-rtp' && report.kind === 'video') {
+        if (lastSendRef.current) {
+          const bitrate =
+            ((report.bytesSent - lastSendRef.current.bytes) * 8) /
+            ((report.timestamp - lastSendRef.current.timestamp) / 1000);
+
+          sendBitrate = `${Math.floor(bitrate / 1000)} kbps`;
+        }
+
+        lastSendRef.current = {
+          bytes: report.bytesSent,
+          timestamp: report.timestamp,
+        };
+
+        if (report.packetsSent && report.packetsLost !== undefined) {
+          const total = report.packetsSent + report.packetsLost;
+          const loss = total > 0 ? (report.packetsLost / total) * 100 : 0;
+          sendLoss = `${loss.toFixed(2)} %`;
+        }
+      }
+
+      // ---------- RECEIVE ----------
+      if (report.type === 'inbound-rtp' && report.kind === 'video') {
+        if (lastRecvRef.current) {
+          const bitrate =
+            ((report.bytesReceived - lastRecvRef.current.bytes) * 8) /
+            ((report.timestamp - lastRecvRef.current.timestamp) / 1000);
+
+          receiveBitrate = `${Math.floor(bitrate / 1000)} kbps`;
+        }
+
+        lastRecvRef.current = {
+          bytes: report.bytesReceived,
+          timestamp: report.timestamp,
+        };
+
+        if (report.packetsReceived && report.packetsLost !== undefined) {
+          const total = report.packetsReceived + report.packetsLost;
+          const loss = total > 0 ? (report.packetsLost / total) * 100 : 0;
+          receiveLoss = `${loss.toFixed(2)} %`;
+        }
+      }
+
+      // ---------- RTT ----------
+      if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+        if (report.currentRoundTripTime) {
+          const rtt = report.currentRoundTripTime * 1000;
+          sendRTT = `${rtt.toFixed(1)} ms`;
+          receiveRTT = `${rtt.toFixed(1)} ms`;
+        }
+      }
+
+      // ---------- RESOLUTION ----------
+      if (report.type === 'track' && report.kind === 'video') {
+        if (report.frameWidth && report.frameHeight) {
+          localResolution = `${report.frameWidth}x${report.frameHeight}`;
+        }
+      }
+    });
+
+    // Update refs directly to avoid triggering a component re-render that causes video flicker
+    // Refs allow us to update the DOM without re-rendering the video elements
+    cameraStatsRef.current = {
+      sendBitrate,
+      sendRTT,
+      sendLoss,
+      receiveBitrate,
+      receiveRTT,
+      receiveLoss,
+      local: localResolution,
+    };
+
+    if (sendBitrateRef.current) sendBitrateRef.current.textContent = sendBitrate;
+    if (sendRTTRef.current) sendRTTRef.current.textContent = sendRTT;
+    if (sendLossRef.current) sendLossRef.current.textContent = sendLoss;
+    if (receiveBitrateRef.current) receiveBitrateRef.current.textContent = receiveBitrate;
+    if (receiveRTTRef.current) receiveRTTRef.current.textContent = receiveRTT;
+    if (receiveLossRef.current) receiveLossRef.current.textContent = receiveLoss;
+    if (localResolutionRef.current) localResolutionRef.current.textContent = localResolution;
+  };
+
+  useEffect(() => {
+    if (!joined) return;
+
+    const interval = setInterval(() => {
+      collectStats();
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [joined]);
+
 
   const startLocalStream = async (): Promise<MediaStream> => {
     const getVideoConstraints = () => {
@@ -418,28 +555,28 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
           <div style={styles.statsCard}>
             <div style={styles.sectionTitle}>Camera</div>
             <div style={styles.statRow}>
-              <span>Send Bitrate: -</span>
+              <span>Send Bitrate: <span ref={sendBitrateRef}>-</span></span>
             </div>
             <div style={styles.statRow}>
-              <span>Send RTT: -</span>
+              <span>Send RTT: <span ref={sendRTTRef}>-</span></span>
             </div>
             <div style={styles.statRow}>
-              <span>Send Loss: -</span>
+              <span>Send Loss: <span ref={sendLossRef}>-</span></span>
             </div>
             <div style={styles.statRow}>
-              <span>Receive Bitrate: -</span>
+              <span>Receive Bitrate: <span ref={receiveBitrateRef}>-</span></span>
             </div>
             <div style={styles.statRow}>
-              <span>Receive RTT: -</span>
+              <span>Receive RTT: <span ref={receiveRTTRef}>-</span></span>
+            </div>
+            <div style={styles.statRow}>
+              <span>Receive Loss: <span ref={receiveLossRef}>-</span></span>
             </div>
             <div style={styles.statRow}>
               <span>Receive Loss: -</span>
             </div>
             <div style={styles.statRow}>
-              <span>Local: -</span>
-            </div>
-            <div style={styles.statRow}>
-              <span>Remote: -</span>
+              <span>Local: <span ref={localResolutionRef}>-</span></span>
             </div>
           </div>
 
