@@ -1335,7 +1335,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
                                 peerStatsDomRefsRef.current[id] = { videoBitrate: null, videoRTT: null, videoLoss: null, audioBitrate: null, audioRTT: null, audioLoss: null };
                               }
                               peerStatsDomRefsRef.current[id].videoBitrate = el;
-                              el.textContent = peerStats.video.receiveBitrate;
                             }
                           }}>-</span></div>
                           <div>RTT: <span ref={el => {
@@ -1344,7 +1343,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
                                 peerStatsDomRefsRef.current[id] = { videoBitrate: null, videoRTT: null, videoLoss: null, audioBitrate: null, audioRTT: null, audioLoss: null };
                               }
                               peerStatsDomRefsRef.current[id].videoRTT = el;
-                              el.textContent = peerStats.video.receiveRTT;
                             }
                           }}>-</span></div>
                           <div>Packet Loss: <span ref={el => {
@@ -1353,7 +1351,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
                                 peerStatsDomRefsRef.current[id] = { videoBitrate: null, videoRTT: null, videoLoss: null, audioBitrate: null, audioRTT: null, audioLoss: null };
                               }
                               peerStatsDomRefsRef.current[id].videoLoss = el;
-                              el.textContent = peerStats.video.receiveLoss;
                             }
                           }}>-</span></div>
                         </div>
@@ -1385,7 +1382,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
                                 peerStatsDomRefsRef.current[id] = { videoBitrate: null, videoRTT: null, videoLoss: null, audioBitrate: null, audioRTT: null, audioLoss: null };
                               }
                               peerStatsDomRefsRef.current[id].audioBitrate = el;
-                              el.textContent = peerStats.audio.receiveBitrate;
                             }
                           }}>-</span></div>
                           <div>RTT: <span ref={el => {
@@ -1394,7 +1390,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
                                 peerStatsDomRefsRef.current[id] = { videoBitrate: null, videoRTT: null, videoLoss: null, audioBitrate: null, audioRTT: null, audioLoss: null };
                               }
                               peerStatsDomRefsRef.current[id].audioRTT = el;
-                              el.textContent = peerStats.audio.receiveRTT;
                             }
                           }}>-</span></div>
                           <div>Packet Loss: <span ref={el => {
@@ -1403,7 +1398,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
                                 peerStatsDomRefsRef.current[id] = { videoBitrate: null, videoRTT: null, videoLoss: null, audioBitrate: null, audioRTT: null, audioLoss: null };
                               }
                               peerStatsDomRefsRef.current[id].audioLoss = el;
-                              el.textContent = peerStats.audio.receiveLoss;
                             }
                           }}>-</span></div>
                         </div>
