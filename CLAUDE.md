@@ -213,4 +213,26 @@ When modifying this project, Claude must:
 6. Ensure no memory leaks.
 7. Keep PeerConnection lifecycle deterministic.
 
+
+---
+
+## 8. Repository Safety Rule
+
+Claude MUST NOT perform git commits, pushes, rebases, or any repository-modifying VCS operations autonomously.
+
+Specifically:
+
+- Do NOT run `git commit`
+- Do NOT run `git push`
+- Do NOT run `git rebase`
+- Do NOT run `git reset`
+- Do NOT create branches
+- Do NOT modify git history in any way
+
+Claude may suggest commit messages or version control strategies,  
+but must never execute repository write operations.
+
+All commit actions must be explicitly performed by a human developer.
+
+
 Always review this CLAUDE.md before making changes.
