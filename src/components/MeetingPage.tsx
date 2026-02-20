@@ -399,6 +399,76 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     }
   };
 
+  const setupRemoteAudioGain = (stream: MediaStream, peerId?: string): void => {
+    try {
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length === 0) {
+        console.warn('[setupRemoteAudioGain] No audio tracks in stream');
+        return;
+      }
+
+      // Initialize audio context if needed
+      if (!speakerAudioContextRef.current) {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        speakerAudioContextRef.current = new AudioContextClass();
+      }
+
+      const audioContext = speakerAudioContextRef.current;
+
+      // Handle suspended context
+      const setupGainNode = (): void => {
+        try {
+          // Create source from the stream
+          const source = audioContext.createMediaStreamSource(stream);
+
+          // Create gain node for controlling speaker volume
+          const gainNode = audioContext.createGain();
+          gainNode.gain.setValueAtTime(speakerEnabled ? speakerVolume : 0, audioContext.currentTime);
+
+          // Connect: source -> gainNode -> destination (speakers)
+          source.connect(gainNode);
+          gainNode.connect(audioContext.destination);
+
+          // Store the gain node reference
+          speakerGainNodesRef.current.set(stream, gainNode);
+
+          // CRITICAL: Mute the video element since audio is now routed through Web Audio API
+          // This prevents double audio (both from video element and from gain node)
+          const videoElements = document.querySelectorAll('[data-remote-video]');
+          let mutedElement = false;
+          videoElements.forEach((el) => {
+            const video = el as HTMLVideoElement;
+            if (video.srcObject === stream) {
+              video.volume = 0;
+              mutedElement = true;
+              console.log(
+                `[setupRemoteAudioGain] 🔇 Muted video element for peer ${peerId || 'unknown'}`
+              );
+            }
+          });
+
+          console.log(
+            `[setupRemoteAudioGain] ✅ Setup complete | gain: ${gainNode.gain.value}x | state: ${audioContext.state} | tracks: ${audioTracks.length} | muted: ${mutedElement}`
+          );
+        } catch (error) {
+          console.warn('[setupRemoteAudioGain] Failed to setup gain node:', error);
+        }
+      };
+
+      if (audioContext.state === 'suspended') {
+        audioContext.resume().then(() => {
+          if (audioContext.state === 'running') {
+            setupGainNode();
+          }
+        });
+      } else {
+        setupGainNode();
+      }
+    } catch (error) {
+      console.warn('[setupRemoteAudioGain] Failed to initialize audio context:', error);
+    }
+  };
+
   const handleSpeakerToggle = (): void => {
     // SPEAKER = whether this user can hear audio from other users
     // This controls the gain of remote audio through Web Audio API
@@ -406,30 +476,21 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
     console.log(`[Speaker] Toggling from ${speakerEnabled} to ${newState}, peers count: ${Object.keys(peers).length}`);
 
-    // Disable/enable audio tracks at the MediaStream level
+    // Update gain nodes for all remote streams
+    const audioContext = speakerAudioContextRef.current;
     Object.entries(peers).forEach(([peerId, peerInfo]) => {
+      const gainNode = speakerGainNodesRef.current.get(peerInfo.stream);
+      if (gainNode && audioContext && audioContext.state === 'running') {
+        const targetGain = newState ? speakerVolume : 0;
+        gainNode.gain.setValueAtTime(targetGain, audioContext.currentTime);
+        console.log(`[Speaker] 🔊 Updated gain for peer ${peerId}: ${targetGain.toFixed(2)}x`);
+      }
+
+      // Also disable/enable audio tracks at the MediaStream level as fallback
       const audioTracks = peerInfo.stream.getAudioTracks();
-      console.log(`[Speaker] Peer ${peerId}: ${audioTracks.length} audio track(s)`);
-      audioTracks.forEach((track, idx) => {
-        console.log(`[Speaker] Setting audio track ${idx} enabled: ${newState}`);
+      audioTracks.forEach((track) => {
         track.enabled = newState;
       });
-    });
-
-    // Also control video element volume as a fallback
-    const remoteVideos = document.querySelectorAll('[data-remote-video]');
-    console.log(`[Speaker] Found ${remoteVideos.length} remote video elements`);
-    remoteVideos.forEach((videoEl) => {
-      const video = videoEl as HTMLVideoElement;
-      if (newState) {
-        // Speaker ON: restore volume to current level
-        video.volume = speakerVolume;
-        console.log(`[Speaker] Set video volume to ${speakerVolume}`);
-      } else {
-        // Speaker OFF: mute by setting volume to 0
-        video.volume = 0;
-        console.log('[Speaker] Set video volume to 0');
-      }
     });
 
     setSpeakerEnabled(newState);
@@ -441,12 +502,14 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
     console.log(`[Speaker Volume] Changed to ${volume.toFixed(2)}`);
 
-    // Apply the volume to all remote video elements
+    // Apply the volume to all gain nodes
     if (speakerEnabled) {
-      const remoteVideos = document.querySelectorAll('[data-remote-video]');
-      remoteVideos.forEach((videoEl) => {
-        const video = videoEl as HTMLVideoElement;
-        video.volume = volume;
+      const audioContext = speakerAudioContextRef.current;
+      Object.entries(peers).forEach(([, peerInfo]) => {
+        const gainNode = speakerGainNodesRef.current.get(peerInfo.stream);
+        if (gainNode && audioContext && audioContext.state === 'running') {
+          gainNode.gain.setValueAtTime(volume, audioContext.currentTime);
+        }
       });
     }
   };
@@ -685,6 +748,12 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
                 const existingStream = prev[peerId];
                 const newStream = existingStream ? existingStream.stream : new MediaStream();
                 newStream.addTrack(consumer.track);
+
+                // Setup remote audio gain if audio track was added
+                if (kind === 'audio') {
+                  setupRemoteAudioGain(newStream, peerId);
+                }
+
                 return {
                   ...prev,
                   [peerId]: {
@@ -786,6 +855,12 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
               // Add track to existing stream
               existingPeer.stream.addTrack(consumer.track);
               console.log(`[newConsumer] Added ${kind} track to existing stream`);
+
+              // Setup remote audio gain if audio track was just added
+              if (kind === 'audio') {
+                setupRemoteAudioGain(existingPeer.stream, id);
+              }
+
               return prev;
             } else {
               // Create new stream with first track
@@ -793,17 +868,9 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
               newStream.addTrack(consumer.track);
               console.log(`[newConsumer] Created new stream with ${kind} track`);
 
-              // Set speaker device for audio tracks if available
-              if (kind === 'audio' && selectedSpeakerId && selectedSpeakerId !== '') {
-                setTimeout(() => {
-                  const videoEl = document.querySelector(`[data-remote-video-${id}]`) as HTMLVideoElement;
-                  if (videoEl && 'setSinkId' in videoEl) {
-                    (videoEl.setSinkId as (id: string) => Promise<void>)(selectedSpeakerId)
-                      .catch((error) => {
-                        console.warn(`[newConsumer] Failed to set sink ID for peer ${id}:`, error);
-                      });
-                  }
-                }, 100);
+              // Setup remote audio gain if this is an audio track
+              if (kind === 'audio') {
+                setupRemoteAudioGain(newStream, id);
               }
 
               return {
