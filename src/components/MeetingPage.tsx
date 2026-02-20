@@ -966,6 +966,11 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
           break;
       }
 
+      // Add current camera device ID to constraints
+      if (selectedCameraId) {
+        videoConstraints.deviceId = { exact: selectedCameraId };
+      }
+
       // Get audio constraints
       const audioConstraints: any = {};
       if (selectedMicId) {
