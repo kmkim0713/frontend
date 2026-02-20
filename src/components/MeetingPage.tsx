@@ -1274,7 +1274,11 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
         {joined && (
           <div style={styles.videoGrid}>
-            <div style={styles.videoTile}>
+            <div style={{
+              ...styles.videoTile,
+              display: 'flex',
+              flexDirection: 'column',
+            }}>
               <video
                 ref={localVideoRef}
                 autoPlay
@@ -1282,7 +1286,101 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
                 muted
                 style={styles.video}
               />
-              <div style={styles.videoLabel}>나 ({user.userName})</div>
+              <button
+                onClick={() => {
+                  setExpandedPeers(prev => {
+                    const newSet = new Set(prev);
+                    if (newSet.has('local')) {
+                      newSet.delete('local');
+                    } else {
+                      newSet.add('local');
+                    }
+                    return newSet;
+                  });
+                }}
+                style={{
+                  padding: '8px 12px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  color: 'var(--text-muted)',
+                  borderTop: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-input)',
+                  transition: 'all 0.2s ease',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'var(--bg-surface)';
+                  e.currentTarget.style.color = 'var(--text-primary)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'var(--bg-input)';
+                  e.currentTarget.style.color = 'var(--text-muted)';
+                }}
+              >
+                <span>나 ({user.userName})</span>
+                <span style={{ fontSize: '10px' }}>{expandedPeers.has('local') ? '▼' : '▶'}</span>
+              </button>
+
+              {expandedPeers.has('local') && (
+                <div style={{ padding: '12px', fontSize: '11px', background: 'var(--bg-input)', borderTop: '1px solid var(--border-subtle)' }}>
+                  <div style={{ marginBottom: '12px' }}>
+                    <div style={{
+                      fontSize: '11px',
+                      fontWeight: '600',
+                      color: 'var(--text-primary)',
+                      marginBottom: '8px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                    }}>
+                      Video
+                    </div>
+                    <div style={{
+                      fontSize: '10px',
+                      fontWeight: '600',
+                      color: 'var(--text-muted)',
+                      marginBottom: '4px',
+                    }}>
+                      Tx (Send)
+                    </div>
+                    <div style={{ color: 'var(--text-muted)', lineHeight: '1.4', fontSize: '10px' }}>
+                      <div>Bitrate: <span ref={videoSendBitrateRef}>-</span></div>
+                      <div>RTT: <span ref={videoSendRTTRef}>-</span></div>
+                      <div>Packet Loss: <span ref={videoSendLossRef}>-</span></div>
+                      <div>Resolution: <span ref={videoLocalResolutionRef}>-</span></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{
+                      fontSize: '11px',
+                      fontWeight: '600',
+                      color: 'var(--text-primary)',
+                      marginBottom: '8px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                    }}>
+                      Audio
+                    </div>
+                    <div style={{
+                      fontSize: '10px',
+                      fontWeight: '600',
+                      color: 'var(--text-muted)',
+                      marginBottom: '4px',
+                    }}>
+                      Tx (Send)
+                    </div>
+                    <div style={{ color: 'var(--text-muted)', lineHeight: '1.4', fontSize: '10px' }}>
+                      <div>Bitrate: <span ref={audioSendBitrateRef}>-</span></div>
+                      <div>RTT: <span ref={audioSendRTTRef}>-</span></div>
+                      <div>Packet Loss: <span ref={audioSendLossRef}>-</span></div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
             {Object.entries(peers).map(([id, peerInfo]) => {
               const isExpanded = expandedPeers.has(id);
@@ -1484,65 +1582,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
           </div>
         </div>
 
-        <div style={styles.networkSection}>
-          <div style={styles.sectionTitle}>Network</div>
-          <div style={styles.statRow}>
-            <span>Status: -</span>
-          </div>
-        </div>
-
-        <div style={styles.statsGrid}>
-          <div style={styles.statsCard}>
-            <div style={styles.sectionTitle}>Video</div>
-            <div style={{ marginBottom: '8px' }}>
-              <div style={{
-                fontSize: '11px',
-                fontWeight: '600',
-                color: 'var(--text-primary)',
-                marginBottom: '6px',
-                textTransform: 'uppercase',
-                letterSpacing: '0.5px',
-              }}>
-                Tx (Send)
-              </div>
-              <div style={styles.statRow}>
-                <span>Bitrate: <span ref={videoSendBitrateRef}>-</span></span>
-              </div>
-              <div style={styles.statRow}>
-                <span>RTT: <span ref={videoSendRTTRef}>-</span></span>
-              </div>
-              <div style={styles.statRow}>
-                <span>Packet Loss: <span ref={videoSendLossRef}>-</span></span>
-              </div>
-            </div>
-            <div style={styles.statRow}>
-              <span>Local Resolution: <span ref={videoLocalResolutionRef}>-</span></span>
-            </div>
-          </div>
-
-          <div style={styles.statsCard}>
-            <div style={styles.sectionTitle}>Audio</div>
-            <div style={{
-              fontSize: '11px',
-              fontWeight: '600',
-              color: 'var(--text-primary)',
-              marginBottom: '6px',
-              textTransform: 'uppercase',
-              letterSpacing: '0.5px',
-            }}>
-              Tx (Send)
-            </div>
-            <div style={styles.statRow}>
-              <span>Bitrate: <span ref={audioSendBitrateRef}>-</span></span>
-            </div>
-            <div style={styles.statRow}>
-              <span>RTT: <span ref={audioSendRTTRef}>-</span></span>
-            </div>
-            <div style={styles.statRow}>
-              <span>Packet Loss: <span ref={audioSendLossRef}>-</span></span>
-            </div>
-          </div>
-        </div>
 
       </div>
     </div>
