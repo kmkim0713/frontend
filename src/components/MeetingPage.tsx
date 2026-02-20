@@ -18,7 +18,7 @@ interface MeetingPageProps {
   onLeaveApp: () => void;
 }
 
-interface CameraStats {
+interface MediaStats {
   sendBitrate: string;
   sendRTT: string;
   sendLoss: string;
@@ -26,6 +26,20 @@ interface CameraStats {
   receiveRTT: string;
   receiveLoss: string;
   local: string;
+}
+
+interface PeerMediaStats {
+  video: MediaStats;
+  audio: MediaStats;
+}
+
+interface PeerStatsDomRefs {
+  videoBitrate: HTMLSpanElement | null;
+  videoRTT: HTMLSpanElement | null;
+  videoLoss: HTMLSpanElement | null;
+  audioBitrate: HTMLSpanElement | null;
+  audioRTT: HTMLSpanElement | null;
+  audioLoss: HTMLSpanElement | null;
 }
 
 
@@ -79,7 +93,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const speakerAudioContextRef = useRef<AudioContext | null>(null);
   const speakerGainNodesRef = useRef<WeakMap<MediaStream, GainNode>>(new WeakMap());
 
-  const cameraStatsRef = useRef<CameraStats>({
+  const videoStatsRef = useRef<MediaStats>({
     sendBitrate: '-',
     sendRTT: '-',
     sendLoss: '-',
@@ -88,15 +102,35 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     receiveLoss: '-',
     local: '-',
   });
-  const lastSendRef = useRef<{ bytes: number; timestamp: number } | null>(null);
-  const lastRecvRef = useRef<{ bytes: number; timestamp: number } | null>(null);
-  const sendBitrateRef = useRef<HTMLSpanElement>(null);
-  const sendRTTRef = useRef<HTMLSpanElement>(null);
-  const sendLossRef = useRef<HTMLSpanElement>(null);
-  const receiveBitrateRef = useRef<HTMLSpanElement>(null);
-  const receiveRTTRef = useRef<HTMLSpanElement>(null);
-  const receiveLossRef = useRef<HTMLSpanElement>(null);
-  const localResolutionRef = useRef<HTMLSpanElement>(null);
+
+  const audioStatsRef = useRef<MediaStats>({
+    sendBitrate: '-',
+    sendRTT: '-',
+    sendLoss: '-',
+    receiveBitrate: '-',
+    receiveRTT: '-',
+    receiveLoss: '-',
+    local: '-',
+  });
+
+  const peerStatsRef = useRef<Record<string, PeerMediaStats>>({});
+  const peerStatsDomRefsRef = useRef<Record<string, PeerStatsDomRefs>>({});
+  const [expandedPeers, setExpandedPeers] = useState<Set<string>>(new Set());
+  const lastSendVideoRef = useRef<{ bytes: number; timestamp: number } | null>(null);
+  const lastSendAudioRef = useRef<{ bytes: number; timestamp: number } | null>(null);
+  const lastRecvVideoRef = useRef<Record<string, { bytes: number; timestamp: number }>>({});
+  const lastRecvAudioRef = useRef<Record<string, { bytes: number; timestamp: number }>>({});
+
+  // Video send refs
+  const videoSendBitrateRef = useRef<HTMLSpanElement>(null);
+  const videoSendRTTRef = useRef<HTMLSpanElement>(null);
+  const videoSendLossRef = useRef<HTMLSpanElement>(null);
+  const videoLocalResolutionRef = useRef<HTMLSpanElement>(null);
+
+  // Audio send refs
+  const audioSendBitrateRef = useRef<HTMLSpanElement>(null);
+  const audioSendRTTRef = useRef<HTMLSpanElement>(null);
+  const audioSendLossRef = useRef<HTMLSpanElement>(null);
 
   const enumerateDevices = async (): Promise<void> => {
     try {
@@ -137,134 +171,213 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   }, []);
 
   const collectStats = async () => {
-    let sendBitrate = '-';
-    let sendRTT = '-';
-    let sendLoss = '-';
-    let receiveBitrate = '-';
-    let receiveRTT = '-';
-    let receiveLoss = '-';
-    let localResolution = '-';
+    // ===== VIDEO SEND STATS =====
+    let videoSendBitrate = '-';
+    let videoSendRTT = '-';
+    let videoSendLoss = '-';
+    let videoLocalResolution = '-';
+
+    // ===== AUDIO SEND STATS =====
+    let audioSendBitrate = '-';
+    let audioSendRTT = '-';
+    let audioSendLoss = '-';
 
     // Get stats from send transport
     if (sendTransportRef.current) {
       const sendStats = await sendTransportRef.current.getStats();
 
       sendStats.forEach((report: any) => {
-        // ---------- SEND ----------
+        // ---------- VIDEO SEND ----------
         if (report.type === 'outbound-rtp' && report.kind === 'video') {
-          if (lastSendRef.current) {
+          if (lastSendVideoRef.current) {
             const bitrate =
-              ((report.bytesSent - lastSendRef.current.bytes) * 8) /
-              ((report.timestamp - lastSendRef.current.timestamp) / 1000);
-
-            sendBitrate = `${Math.floor(bitrate / 1000)} kbps`;
+              ((report.bytesSent - lastSendVideoRef.current.bytes) * 8) /
+              ((report.timestamp - lastSendVideoRef.current.timestamp) / 1000);
+            videoSendBitrate = `${Math.floor(bitrate / 1000)} kbps`;
           }
 
-          lastSendRef.current = {
+          lastSendVideoRef.current = {
             bytes: report.bytesSent,
             timestamp: report.timestamp,
           };
 
-          // Calculate packet loss - handle case where packetsLost might be 0
           if (report.packetsSent !== undefined) {
             const packetsLost = report.packetsLost || 0;
             const total = report.packetsSent + packetsLost;
             const loss = total > 0 ? (packetsLost / total) * 100 : 0;
-            sendLoss = `${loss.toFixed(2)} %`;
+            videoSendLoss = `${loss.toFixed(2)} %`;
           }
 
-          // Get local resolution from outbound-rtp stats
           if (report.frameWidth && report.frameHeight) {
-            localResolution = `${report.frameWidth}x${report.frameHeight}`;
+            videoLocalResolution = `${report.frameWidth}x${report.frameHeight}`;
+          }
+        }
+
+        // ---------- AUDIO SEND ----------
+        if (report.type === 'outbound-rtp' && report.kind === 'audio') {
+          if (lastSendAudioRef.current) {
+            const bitrate =
+              ((report.bytesSent - lastSendAudioRef.current.bytes) * 8) /
+              ((report.timestamp - lastSendAudioRef.current.timestamp) / 1000);
+            audioSendBitrate = `${Math.floor(bitrate / 1000)} kbps`;
+          }
+
+          lastSendAudioRef.current = {
+            bytes: report.bytesSent,
+            timestamp: report.timestamp,
+          };
+
+          if (report.packetsSent !== undefined) {
+            const packetsLost = report.packetsLost || 0;
+            const total = report.packetsSent + packetsLost;
+            const loss = total > 0 ? (packetsLost / total) * 100 : 0;
+            audioSendLoss = `${loss.toFixed(2)} %`;
           }
         }
 
         // ---------- RTT (from candidate-pair stats) ----------
-        // RTT is available in active candidate-pair stats
         if (report.type === 'candidate-pair') {
-          // Check for RTT in either currentRoundTripTime or roundTripTime property
           const rttSeconds = report.currentRoundTripTime ?? report.roundTripTime;
-
-          // RTT should be available when state is 'succeeded' or connection is active
-          // Also check that RTT is a valid positive number
           if (rttSeconds !== undefined && rttSeconds !== null && typeof rttSeconds === 'number' && rttSeconds > 0) {
             const rttMs = rttSeconds * 1000;
-            sendRTT = `${rttMs.toFixed(1)} ms`;
-            receiveRTT = `${rttMs.toFixed(1)} ms`;
+            videoSendRTT = `${rttMs.toFixed(1)} ms`;
+            audioSendRTT = `${rttMs.toFixed(1)} ms`;
           }
         }
       });
     }
 
-    // Get stats from receive transports to calculate receive bitrate and loss
-    const receiveTransports = Object.values(consumerTransportsRef.current);
-    if (receiveTransports.length > 0) {
-      // Aggregate stats from all receive transports
-      let totalBytesReceived = 0;
-      let totalPacketsReceived = 0;
-      let totalPacketsLost = 0;
-      let latestTimestamp = 0;
-
-      for (const recvTransport of receiveTransports) {
-        const recvStats = await recvTransport.getStats();
-
-        recvStats.forEach((report: any) => {
-          // ---------- RECEIVE ----------
-          if (report.type === 'inbound-rtp' && report.kind === 'video') {
-            totalBytesReceived += report.bytesReceived || 0;
-            totalPacketsReceived += report.packetsReceived || 0;
-            totalPacketsLost += report.packetsLost || 0;
-            latestTimestamp = Math.max(latestTimestamp, report.timestamp || 0);
-          }
-        });
-      }
-
-      // Calculate receive bitrate from aggregated data
-      if (totalBytesReceived > 0 && lastRecvRef.current) {
-        const timeDiffMs = latestTimestamp - lastRecvRef.current.timestamp;
-        if (timeDiffMs > 0) {
-          const bitrate = ((totalBytesReceived - lastRecvRef.current.bytes) * 8) / (timeDiffMs / 1000);
-          if (isFinite(bitrate) && bitrate >= 0) {
-            receiveBitrate = `${Math.floor(bitrate / 1000)} kbps`;
-          }
-        }
-      }
-
-      // Update last receive stats
-      if (totalBytesReceived > 0) {
-        lastRecvRef.current = {
-          bytes: totalBytesReceived,
-          timestamp: latestTimestamp,
+    // ===== PER-PEER RECEIVE STATS =====
+    Object.entries(consumerTransportsRef.current).forEach(([peerId, recvTransport]) => {
+      // Initialize peer stats if not exists
+      if (!peerStatsRef.current[peerId]) {
+        peerStatsRef.current[peerId] = {
+          video: { sendBitrate: '-', sendRTT: '-', sendLoss: '-', receiveBitrate: '-', receiveRTT: '-', receiveLoss: '-', local: '-' },
+          audio: { sendBitrate: '-', sendRTT: '-', sendLoss: '-', receiveBitrate: '-', receiveRTT: '-', receiveLoss: '-', local: '-' },
         };
       }
 
-      // Calculate aggregated packet loss
-      if (totalPacketsReceived > 0) {
-        const total = totalPacketsReceived + totalPacketsLost;
-        const loss = total > 0 ? (totalPacketsLost / total) * 100 : 0;
-        receiveLoss = `${loss.toFixed(2)} %`;
-      }
-    }
+      recvTransport.getStats().then((recvStats: any) => {
+        let videoReceiveBitrate = '-';
+        let videoReceiveRTT = '-';
+        let videoReceiveLoss = '-';
+        let audioReceiveBitrate = '-';
+        let audioReceiveRTT = '-';
+        let audioReceiveLoss = '-';
 
-    // Update refs directly to avoid triggering a component re-render that causes video flicker
-    // Refs allow us to update the DOM without re-rendering the video elements
-    cameraStatsRef.current = {
-      sendBitrate,
-      sendRTT,
-      sendLoss,
-      receiveBitrate,
-      receiveRTT,
-      receiveLoss,
-      local: localResolution,
-    };
+        console.log(`[collectStats] Peer ${peerId} - Processing ${recvStats.length} stat reports`);
 
-    if (sendBitrateRef.current) sendBitrateRef.current.textContent = sendBitrate;
-    if (sendRTTRef.current) sendRTTRef.current.textContent = sendRTT;
-    if (sendLossRef.current) sendLossRef.current.textContent = sendLoss;
-    if (receiveBitrateRef.current) receiveBitrateRef.current.textContent = receiveBitrate;
-    if (receiveRTTRef.current) receiveRTTRef.current.textContent = receiveRTT;
-    if (receiveLossRef.current) receiveLossRef.current.textContent = receiveLoss;
-    if (localResolutionRef.current) localResolutionRef.current.textContent = localResolution;
+        recvStats.forEach((report: any) => {
+          // ---------- VIDEO RECEIVE ----------
+          if (report.type === 'inbound-rtp' && report.kind === 'video') {
+            console.log(`[collectStats] Peer ${peerId} VIDEO - bytesReceived: ${report.bytesReceived}, timestamp: ${report.timestamp}`);
+            const lastRecv = lastRecvVideoRef.current[peerId];
+            if (lastRecv && lastRecv.timestamp > 0) {
+              const timeDiffMs = report.timestamp - lastRecv.timestamp;
+              if (timeDiffMs > 0) {
+                const bitrate = ((report.bytesReceived - lastRecv.bytes) * 8) / (timeDiffMs / 1000);
+                if (isFinite(bitrate) && bitrate >= 0) {
+                  videoReceiveBitrate = `${Math.floor(bitrate / 1000)} kbps`;
+                }
+              }
+            }
+
+            // Always update the last measurement for next collection cycle
+            lastRecvVideoRef.current[peerId] = {
+              bytes: report.bytesReceived || 0,
+              timestamp: report.timestamp || 0,
+            };
+
+            if (report.packetsReceived !== undefined) {
+              const packetsLost = report.packetsLost || 0;
+              const total = report.packetsReceived + packetsLost;
+              const loss = total > 0 ? (packetsLost / total) * 100 : 0;
+              videoReceiveLoss = `${loss.toFixed(2)} %`;
+            }
+          }
+
+          // ---------- AUDIO RECEIVE ----------
+          if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+            console.log(`[collectStats] Peer ${peerId} AUDIO - bytesReceived: ${report.bytesReceived}, timestamp: ${report.timestamp}`);
+            const lastRecv = lastRecvAudioRef.current[peerId];
+            if (lastRecv && lastRecv.timestamp > 0) {
+              const timeDiffMs = report.timestamp - lastRecv.timestamp;
+              if (timeDiffMs > 0) {
+                const bitrate = ((report.bytesReceived - lastRecv.bytes) * 8) / (timeDiffMs / 1000);
+                if (isFinite(bitrate) && bitrate >= 0) {
+                  audioReceiveBitrate = `${Math.floor(bitrate / 1000)} kbps`;
+                }
+              }
+            }
+
+            // Always update the last measurement for next collection cycle
+            lastRecvAudioRef.current[peerId] = {
+              bytes: report.bytesReceived || 0,
+              timestamp: report.timestamp || 0,
+            };
+
+            if (report.packetsReceived !== undefined) {
+              const packetsLost = report.packetsLost || 0;
+              const total = report.packetsReceived + packetsLost;
+              const loss = total > 0 ? (packetsLost / total) * 100 : 0;
+              audioReceiveLoss = `${loss.toFixed(2)} %`;
+            }
+          }
+
+          // ---------- RTT ----------
+          if (report.type === 'candidate-pair') {
+            const rttSeconds = report.currentRoundTripTime ?? report.roundTripTime;
+            if (rttSeconds !== undefined && rttSeconds !== null && typeof rttSeconds === 'number' && rttSeconds > 0) {
+              const rttMs = rttSeconds * 1000;
+              videoReceiveRTT = `${rttMs.toFixed(1)} ms`;
+              audioReceiveRTT = `${rttMs.toFixed(1)} ms`;
+            }
+          }
+        });
+
+        // Update peer stats
+        peerStatsRef.current[peerId].video.receiveBitrate = videoReceiveBitrate;
+        peerStatsRef.current[peerId].video.receiveRTT = videoReceiveRTT;
+        peerStatsRef.current[peerId].video.receiveLoss = videoReceiveLoss;
+        peerStatsRef.current[peerId].audio.receiveBitrate = audioReceiveBitrate;
+        peerStatsRef.current[peerId].audio.receiveRTT = audioReceiveRTT;
+        peerStatsRef.current[peerId].audio.receiveLoss = audioReceiveLoss;
+
+        // Update DOM refs directly to avoid triggering re-renders
+        const domRefs = peerStatsDomRefsRef.current[peerId];
+        if (domRefs) {
+          if (domRefs.videoBitrate) domRefs.videoBitrate.textContent = videoReceiveBitrate;
+          if (domRefs.videoRTT) domRefs.videoRTT.textContent = videoReceiveRTT;
+          if (domRefs.videoLoss) domRefs.videoLoss.textContent = videoReceiveLoss;
+          if (domRefs.audioBitrate) domRefs.audioBitrate.textContent = audioReceiveBitrate;
+          if (domRefs.audioRTT) domRefs.audioRTT.textContent = audioReceiveRTT;
+          if (domRefs.audioLoss) domRefs.audioLoss.textContent = audioReceiveLoss;
+        }
+
+        console.log(`[collectStats] Peer ${peerId} stats updated - Video Bitrate: ${videoReceiveBitrate}, Audio Bitrate: ${audioReceiveBitrate}`);
+      });
+    });
+
+    // Update video send stats refs
+    videoStatsRef.current.sendBitrate = videoSendBitrate;
+    videoStatsRef.current.sendRTT = videoSendRTT;
+    videoStatsRef.current.sendLoss = videoSendLoss;
+    videoStatsRef.current.local = videoLocalResolution;
+
+    if (videoSendBitrateRef.current) videoSendBitrateRef.current.textContent = videoSendBitrate;
+    if (videoSendRTTRef.current) videoSendRTTRef.current.textContent = videoSendRTT;
+    if (videoSendLossRef.current) videoSendLossRef.current.textContent = videoSendLoss;
+    if (videoLocalResolutionRef.current) videoLocalResolutionRef.current.textContent = videoLocalResolution;
+
+    // Update audio send stats refs
+    audioStatsRef.current.sendBitrate = audioSendBitrate;
+    audioStatsRef.current.sendRTT = audioSendRTT;
+    audioStatsRef.current.sendLoss = audioSendLoss;
+
+    if (audioSendBitrateRef.current) audioSendBitrateRef.current.textContent = audioSendBitrate;
+    if (audioSendRTTRef.current) audioSendRTTRef.current.textContent = audioSendRTT;
+    if (audioSendLossRef.current) audioSendLossRef.current.textContent = audioSendLoss;
+
   };
 
   useEffect(() => {
@@ -276,6 +389,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
     return () => clearInterval(interval);
   }, [joined]);
+
 
 
   const startLocalStream = async (cameraId?: string, micId?: string): Promise<MediaStream> => {
@@ -887,6 +1001,9 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       );
 
       socketRef.current.on('peer-disconnected', (peerId: string) => {
+        // Clean up DOM refs for this peer
+        delete peerStatsDomRefsRef.current[peerId];
+
         setPeers((prev) => {
           const peerInfo = prev[peerId];
           if (peerInfo) peerInfo.stream.getTracks().forEach((track) => track.stop());
@@ -1123,31 +1240,179 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
               />
               <div style={styles.videoLabel}>나 ({user.userName})</div>
             </div>
-            {Object.entries(peers).map(([id, peerInfo]) => (
-              <div key={id} style={styles.videoTile}>
-                <video
-                  ref={(el) => {
-                    if (el) {
-                      el.srcObject = peerInfo.stream;
-                      // Apply current speaker device if available
-                      if (selectedSpeakerId && selectedSpeakerId !== '' && 'setSinkId' in el) {
-                        (el.setSinkId as (id: string) => Promise<void>)(selectedSpeakerId).catch(() => {
-                          // Silently handle errors
-                        });
+            {Object.entries(peers).map(([id, peerInfo]) => {
+              const isExpanded = expandedPeers.has(id);
+              const peerStats = peerStatsRef.current[id];
+
+              return (
+                <div key={id} style={{
+                  ...styles.videoTile,
+                  display: 'flex',
+                  flexDirection: 'column',
+                }}>
+                  <video
+                    ref={(el) => {
+                      if (el) {
+                        el.srcObject = peerInfo.stream;
+                        // Apply current speaker device if available
+                        if (selectedSpeakerId && selectedSpeakerId !== '' && 'setSinkId' in el) {
+                          (el.setSinkId as (id: string) => Promise<void>)(selectedSpeakerId).catch(() => {
+                            // Silently handle errors
+                          });
+                        }
                       }
-                    }
-                  }}
-                  autoPlay
-                  playsInline
-                  data-remote-video
-                  data-remote-video-id={id}
-                  style={styles.video}
-                />
-                <div style={styles.videoLabel}>
-                  {peerInfo.userName} ({peerInfo.userId})
+                    }}
+                    autoPlay
+                    playsInline
+                    data-remote-video
+                    data-remote-video-id={id}
+                    style={styles.video}
+                  />
+                  <button
+                    onClick={() => {
+                      setExpandedPeers(prev => {
+                        const newSet = new Set(prev);
+                        if (newSet.has(id)) {
+                          newSet.delete(id);
+                        } else {
+                          newSet.add(id);
+                        }
+                        return newSet;
+                      });
+                    }}
+                    style={{
+                      padding: '8px 12px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      color: 'var(--text-muted)',
+                      borderTop: '1px solid var(--border-subtle)',
+                      background: 'var(--bg-input)',
+                      transition: 'all 0.2s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'var(--bg-surface)';
+                      e.currentTarget.style.color = 'var(--text-primary)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'var(--bg-input)';
+                      e.currentTarget.style.color = 'var(--text-muted)';
+                    }}
+                  >
+                    <span>{peerInfo.userName} ({peerInfo.userId})</span>
+                    <span style={{ fontSize: '10px' }}>{isExpanded ? '▼' : '▶'}</span>
+                  </button>
+
+                  {isExpanded && peerStats && (
+                    <div style={{ padding: '12px', fontSize: '11px', background: 'var(--bg-input)', borderTop: '1px solid var(--border-subtle)' }}>
+                      <div style={{ marginBottom: '12px' }}>
+                        <div style={{
+                          fontSize: '11px',
+                          fontWeight: '600',
+                          color: 'var(--text-primary)',
+                          marginBottom: '8px',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.5px',
+                        }}>
+                          Video
+                        </div>
+                        <div style={{
+                          fontSize: '10px',
+                          fontWeight: '600',
+                          color: 'var(--text-muted)',
+                          marginBottom: '4px',
+                        }}>
+                          Rx (Receive)
+                        </div>
+                        <div style={{ color: 'var(--text-muted)', lineHeight: '1.4', fontSize: '10px' }}>
+                          <div>Bitrate: <span ref={el => {
+                            if (el) {
+                              if (!peerStatsDomRefsRef.current[id]) {
+                                peerStatsDomRefsRef.current[id] = { videoBitrate: null, videoRTT: null, videoLoss: null, audioBitrate: null, audioRTT: null, audioLoss: null };
+                              }
+                              peerStatsDomRefsRef.current[id].videoBitrate = el;
+                              el.textContent = peerStats.video.receiveBitrate;
+                            }
+                          }}>-</span></div>
+                          <div>RTT: <span ref={el => {
+                            if (el) {
+                              if (!peerStatsDomRefsRef.current[id]) {
+                                peerStatsDomRefsRef.current[id] = { videoBitrate: null, videoRTT: null, videoLoss: null, audioBitrate: null, audioRTT: null, audioLoss: null };
+                              }
+                              peerStatsDomRefsRef.current[id].videoRTT = el;
+                              el.textContent = peerStats.video.receiveRTT;
+                            }
+                          }}>-</span></div>
+                          <div>Packet Loss: <span ref={el => {
+                            if (el) {
+                              if (!peerStatsDomRefsRef.current[id]) {
+                                peerStatsDomRefsRef.current[id] = { videoBitrate: null, videoRTT: null, videoLoss: null, audioBitrate: null, audioRTT: null, audioLoss: null };
+                              }
+                              peerStatsDomRefsRef.current[id].videoLoss = el;
+                              el.textContent = peerStats.video.receiveLoss;
+                            }
+                          }}>-</span></div>
+                        </div>
+                      </div>
+
+                      <div>
+                        <div style={{
+                          fontSize: '11px',
+                          fontWeight: '600',
+                          color: 'var(--text-primary)',
+                          marginBottom: '8px',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.5px',
+                        }}>
+                          Audio
+                        </div>
+                        <div style={{
+                          fontSize: '10px',
+                          fontWeight: '600',
+                          color: 'var(--text-muted)',
+                          marginBottom: '4px',
+                        }}>
+                          Rx (Receive)
+                        </div>
+                        <div style={{ color: 'var(--text-muted)', lineHeight: '1.4', fontSize: '10px' }}>
+                          <div>Bitrate: <span ref={el => {
+                            if (el) {
+                              if (!peerStatsDomRefsRef.current[id]) {
+                                peerStatsDomRefsRef.current[id] = { videoBitrate: null, videoRTT: null, videoLoss: null, audioBitrate: null, audioRTT: null, audioLoss: null };
+                              }
+                              peerStatsDomRefsRef.current[id].audioBitrate = el;
+                              el.textContent = peerStats.audio.receiveBitrate;
+                            }
+                          }}>-</span></div>
+                          <div>RTT: <span ref={el => {
+                            if (el) {
+                              if (!peerStatsDomRefsRef.current[id]) {
+                                peerStatsDomRefsRef.current[id] = { videoBitrate: null, videoRTT: null, videoLoss: null, audioBitrate: null, audioRTT: null, audioLoss: null };
+                              }
+                              peerStatsDomRefsRef.current[id].audioRTT = el;
+                              el.textContent = peerStats.audio.receiveRTT;
+                            }
+                          }}>-</span></div>
+                          <div>Packet Loss: <span ref={el => {
+                            if (el) {
+                              if (!peerStatsDomRefsRef.current[id]) {
+                                peerStatsDomRefsRef.current[id] = { videoBitrate: null, videoRTT: null, videoLoss: null, audioBitrate: null, audioRTT: null, audioLoss: null };
+                              }
+                              peerStatsDomRefsRef.current[id].audioLoss = el;
+                              el.textContent = peerStats.audio.receiveLoss;
+                            }
+                          }}>-</span></div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -1190,58 +1455,57 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
         <div style={styles.statsGrid}>
           <div style={styles.statsCard}>
-            <div style={styles.sectionTitle}>Camera</div>
-            <div style={styles.statRow}>
-              <span>Send Bitrate: <span ref={sendBitrateRef}>-</span></span>
+            <div style={styles.sectionTitle}>Video</div>
+            <div style={{ marginBottom: '8px' }}>
+              <div style={{
+                fontSize: '11px',
+                fontWeight: '600',
+                color: 'var(--text-primary)',
+                marginBottom: '6px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+              }}>
+                Tx (Send)
+              </div>
+              <div style={styles.statRow}>
+                <span>Bitrate: <span ref={videoSendBitrateRef}>-</span></span>
+              </div>
+              <div style={styles.statRow}>
+                <span>RTT: <span ref={videoSendRTTRef}>-</span></span>
+              </div>
+              <div style={styles.statRow}>
+                <span>Packet Loss: <span ref={videoSendLossRef}>-</span></span>
+              </div>
             </div>
             <div style={styles.statRow}>
-              <span>Send RTT: <span ref={sendRTTRef}>-</span></span>
-            </div>
-            <div style={styles.statRow}>
-              <span>Send Loss: <span ref={sendLossRef}>-</span></span>
-            </div>
-            <div style={styles.statRow}>
-              <span>Receive Bitrate: <span ref={receiveBitrateRef}>-</span></span>
-            </div>
-            <div style={styles.statRow}>
-              <span>Receive RTT: <span ref={receiveRTTRef}>-</span></span>
-            </div>
-            <div style={styles.statRow}>
-              <span>Receive Loss: <span ref={receiveLossRef}>-</span></span>
-            </div>
-            <div style={styles.statRow}>
-              <span>Local: <span ref={localResolutionRef}>-</span></span>
+              <span>Local Resolution: <span ref={videoLocalResolutionRef}>-</span></span>
             </div>
           </div>
 
           <div style={styles.statsCard}>
-            <div style={styles.sectionTitle}>Screen Share</div>
-            <div style={styles.statRow}>
-              <span>Send Bitrate: -</span>
+            <div style={styles.sectionTitle}>Audio</div>
+            <div style={{
+              fontSize: '11px',
+              fontWeight: '600',
+              color: 'var(--text-primary)',
+              marginBottom: '6px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+            }}>
+              Tx (Send)
             </div>
             <div style={styles.statRow}>
-              <span>Send RTT: -</span>
+              <span>Bitrate: <span ref={audioSendBitrateRef}>-</span></span>
             </div>
             <div style={styles.statRow}>
-              <span>Send Loss: -</span>
+              <span>RTT: <span ref={audioSendRTTRef}>-</span></span>
             </div>
             <div style={styles.statRow}>
-              <span>Receive Bitrate: -</span>
-            </div>
-            <div style={styles.statRow}>
-              <span>Receive RTT: -</span>
-            </div>
-            <div style={styles.statRow}>
-              <span>Receive Loss: -</span>
-            </div>
-            <div style={styles.statRow}>
-              <span>Local: -</span>
-            </div>
-            <div style={styles.statRow}>
-              <span>Remote: -</span>
+              <span>Packet Loss: <span ref={audioSendLossRef}>-</span></span>
             </div>
           </div>
         </div>
+
       </div>
     </div>
   );
