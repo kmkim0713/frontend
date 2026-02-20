@@ -133,7 +133,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const audioSendRTTRef = useRef<HTMLSpanElement>(null);
   const audioSendLossRef = useRef<HTMLSpanElement>(null);
 
-  const detectSupportedResolutions = async (cameraId: string): Promise<void> => {
+  const detectSupportedResolutions = async (cameraId: string): Promise<string[]> => {
     const resolutionTests = [
       { name: '180p', width: 320, height: 180 },
       { name: '360p', width: 640, height: 360 },
@@ -180,13 +180,15 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     }
 
     console.log(`[detectSupportedResolutions] Supported resolutions for camera ${cameraId}:`, supported);
-    setSupportedResolutions(supported.length > 0 ? supported : ['360p']);
+    const finalSupported = supported.length > 0 ? supported : ['360p'];
+    setSupportedResolutions(finalSupported);
 
     // Set resolution to first supported one (always)
-    if (supported.length > 0) {
-      console.log(`[detectSupportedResolutions] Setting default resolution to: ${supported[0]}`);
-      setResolution(supported[0] as any);
-    }
+    console.log(`[detectSupportedResolutions] Setting default resolution to: ${finalSupported[0]}`);
+    setResolution(finalSupported[0] as any);
+
+    // Return supported resolutions for immediate use in switchCameraDevice
+    return finalSupported;
   };
 
   const enumerateDevices = async (): Promise<void> => {
@@ -779,14 +781,52 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       // Wait 500ms for old track to fully release
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      // Now update camera selection and detect resolutions
+      // Detect supported resolutions for the new camera
+      console.log(`[switchCameraDevice] Detecting supported resolutions for camera: ${deviceId}`);
+      const supportedResolutions = await detectSupportedResolutions(deviceId);
+      const lowestResolution = supportedResolutions[0];
+
+      console.log(`[switchCameraDevice] Camera ${deviceId} supports: ${supportedResolutions.join(', ')}`);
+      console.log(`[switchCameraDevice] Using lowest resolution: ${lowestResolution}`);
+
+      // Update selected camera ID
       setSelectedCameraId(deviceId);
+      setResolution(lowestResolution as any);
+      setSupportedResolutions(supportedResolutions);
 
-      // Wait 1.5s more to allow detectSupportedResolutions to complete
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Get new stream with the lowest supported resolution
+      // Build video constraints directly with the detected lowest resolution
+      let videoConstraints: any;
+      switch (lowestResolution) {
+        case '180p':
+          videoConstraints = { width: { ideal: 320 }, height: { ideal: 180 } };
+          break;
+        case '360p':
+          videoConstraints = { width: { ideal: 640 }, height: { ideal: 360 } };
+          break;
+        case '480p':
+          videoConstraints = { width: { ideal: 640 }, height: { ideal: 480 } };
+          break;
+        case '720p':
+        default:
+          videoConstraints = { width: { ideal: 1280 }, height: { ideal: 720 } };
+          break;
+      }
 
-      // Get new stream with the selected camera
-      const newStream = await startLocalStream(deviceId, selectedMicId);
+      if (deviceId) {
+        videoConstraints.deviceId = { exact: deviceId };
+      }
+
+      const audioConstraints: any = {};
+      if (selectedMicId) {
+        audioConstraints.deviceId = { exact: selectedMicId };
+      }
+
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints,
+        audio: audioConstraints,
+      });
+
       const newVideoTrack = newStream.getVideoTracks()[0];
 
       if (!newVideoTrack) {
@@ -826,7 +866,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         track.stop();
       });
 
-      console.log('[switchCameraDevice] Camera switched successfully');
+      console.log(`[switchCameraDevice] Camera switched successfully to ${lowestResolution}`);
     } catch (error) {
       console.error('[switchCameraDevice] Failed to switch camera:', error);
     }
