@@ -839,6 +839,37 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     }
   };
 
+  const handleResolutionChange = async (newResolution: '360p' | '480p' | '720p'): Promise<void> => {
+    setResolution(newResolution);
+
+    // If not joined, just update the state
+    if (!joined || !producerRef.current?.video) {
+      return;
+    }
+
+    // If joined, restart camera with new resolution
+    try {
+      console.log(`[handleResolutionChange] Changing resolution to ${newResolution}`);
+
+      const newStream = await startLocalStream(selectedCameraId, selectedMicId);
+      const newVideoTrack = newStream.getVideoTracks()[0];
+
+      if (!newVideoTrack) {
+        console.error('[handleResolutionChange] No video track in new stream');
+        return;
+      }
+
+      // Replace the video track in the producer
+      await producerRef.current.video.replaceTrack({
+        track: newVideoTrack,
+      });
+
+      console.log(`[handleResolutionChange] Successfully changed resolution to ${newResolution}`);
+    } catch (error) {
+      console.error('[handleResolutionChange] Failed to change resolution:', error);
+    }
+  };
+
   const handleJoin = async (): Promise<void> => {
     if (socketRef.current === null) {
       if (!meetingId.trim()) {
@@ -1164,7 +1195,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         <div style={styles.controlRow}>
           <select style={styles.resolutionSelect}
             value={resolution}
-            onChange={(e) => setResolution(e.target.value as any)}>
+            onChange={(e) => handleResolutionChange(e.target.value as any)}>
             <option>360p</option>
             <option>480p</option>
             <option>720p</option>
