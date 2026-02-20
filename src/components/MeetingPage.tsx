@@ -83,7 +83,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const producerRef = useRef<ProducerRefs | null>(null);
   const consumerTransportsRef = useRef<ConsumerTransportsRef>({});
   const currentMeetingIdRef = useRef<string | null>(null);
-  const [resolution, setResolution] = useState<'360p' | '480p' | '720p'>('360p');
+  const [resolution, setResolution] = useState<'180p' | '360p' | '480p' | '720p'>('360p');
 
   // Web Audio API for microphone gain control
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -135,6 +135,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
   const detectSupportedResolutions = async (cameraId: string): Promise<void> => {
     const resolutionTests = [
+      { name: '180p', width: 320, height: 180 },
       { name: '360p', width: 640, height: 360 },
       { name: '480p', width: 640, height: 480 },
       { name: '720p', width: 1280, height: 720 },
@@ -502,6 +503,9 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     const getVideoConstraints = () => {
       let baseConstraints;
       switch (resolution) {
+        case '180p':
+          baseConstraints = { width: { ideal: 320 }, height: { ideal: 180 } };
+          break;
         case '360p':
           baseConstraints = { width: { ideal: 640 }, height: { ideal: 360 } };
           break;
@@ -914,7 +918,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     }
   };
 
-  const handleResolutionChange = async (newResolution: '360p' | '480p' | '720p'): Promise<void> => {
+  const handleResolutionChange = async (newResolution: '180p' | '360p' | '480p' | '720p'): Promise<void> => {
     console.log(`[handleResolutionChange] Selected resolution: ${newResolution}, Currently joined: ${joined}`);
     setResolution(newResolution);
 
@@ -931,15 +935,18 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       // Build video constraints directly (don't depend on async state update)
       let videoConstraints: any;
       switch (newResolution) {
+        case '180p':
+          videoConstraints = { width: { ideal: 320 }, height: { ideal: 180 } };
+          break;
         case '360p':
-          videoConstraints = { width: { min: 480, ideal: 640 }, height: { min: 350, ideal: 360, max: 370 } };
+          videoConstraints = { width: { ideal: 640 }, height: { ideal: 360 } };
           break;
         case '480p':
-          videoConstraints = { width: { min: 600, ideal: 640 }, height: { min: 470, ideal: 480, max: 490 } };
+          videoConstraints = { width: { ideal: 640 }, height: { ideal: 480 } };
           break;
         case '720p':
         default:
-          videoConstraints = { width: { min: 1200, ideal: 1280 }, height: { min: 700, ideal: 720, max: 750 } };
+          videoConstraints = { width: { ideal: 1280 }, height: { ideal: 720 } };
           break;
       }
 
