@@ -265,21 +265,29 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         let audioReceiveRTT = '-';
         let audioReceiveLoss = '-';
 
-        console.log(`[collectStats] Peer ${peerId} - Processing ${recvStats.length} stat reports`);
+        // console.log(`[collectStats] Peer ${peerId} - Processing ${recvStats.length} stat reports`);
 
         recvStats.forEach((report: any) => {
           // ---------- VIDEO RECEIVE ----------
           if (report.type === 'inbound-rtp' && report.kind === 'video') {
             console.log(`[collectStats] Peer ${peerId} VIDEO - bytesReceived: ${report.bytesReceived}, timestamp: ${report.timestamp}`);
             const lastRecv = lastRecvVideoRef.current[peerId];
+            console.log(`  lastRecv:`, lastRecv);
             if (lastRecv && lastRecv.timestamp > 0) {
               const timeDiffMs = report.timestamp - lastRecv.timestamp;
+              console.log(`  timeDiffMs: ${timeDiffMs}, bytesDiff: ${report.bytesReceived - lastRecv.bytes}`);
               if (timeDiffMs > 0) {
                 const bitrate = ((report.bytesReceived - lastRecv.bytes) * 8) / (timeDiffMs / 1000);
+                console.log(`  bitrate: ${bitrate}, isFinite: ${isFinite(bitrate)}, >= 0: ${bitrate >= 0}`);
                 if (isFinite(bitrate) && bitrate >= 0) {
                   videoReceiveBitrate = `${Math.floor(bitrate / 1000)} kbps`;
+                  console.log(`🟢 videoReceiveBitrate`, videoReceiveBitrate)
                 }
+              } else {
+                console.log(`  ⚠️ timeDiffMs <= 0, skipping bitrate calculation`);
               }
+            } else {
+              console.log(`  ⚠️ No lastRecv or timestamp <= 0, first measurement`);
             }
 
             // Always update the last measurement for next collection cycle
@@ -300,14 +308,22 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
           if (report.type === 'inbound-rtp' && report.kind === 'audio') {
             console.log(`[collectStats] Peer ${peerId} AUDIO - bytesReceived: ${report.bytesReceived}, timestamp: ${report.timestamp}`);
             const lastRecv = lastRecvAudioRef.current[peerId];
+            console.log(`  lastRecv:`, lastRecv);
             if (lastRecv && lastRecv.timestamp > 0) {
               const timeDiffMs = report.timestamp - lastRecv.timestamp;
+              console.log(`  timeDiffMs: ${timeDiffMs}, bytesDiff: ${report.bytesReceived - lastRecv.bytes}`);
               if (timeDiffMs > 0) {
                 const bitrate = ((report.bytesReceived - lastRecv.bytes) * 8) / (timeDiffMs / 1000);
+                console.log(`  bitrate: ${bitrate}, isFinite: ${isFinite(bitrate)}, >= 0: ${bitrate >= 0}`);
                 if (isFinite(bitrate) && bitrate >= 0) {
                   audioReceiveBitrate = `${Math.floor(bitrate / 1000)} kbps`;
+                  console.log(`🟢 audioReceiveBitrate`, audioReceiveBitrate)
                 }
+              } else {
+                console.log(`  ⚠️ timeDiffMs <= 0, skipping bitrate calculation`);
               }
+            } else {
+              console.log(`  ⚠️ No lastRecv or timestamp <= 0, first measurement`);
             }
 
             // Always update the last measurement for next collection cycle
@@ -345,6 +361,8 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
         // Update DOM refs directly to avoid triggering re-renders
         const domRefs = peerStatsDomRefsRef.current[peerId];
+        console.log("🛑🛑🛑 ~~~ :349 ~~~ collectStats ~~~ domRefs:", domRefs);
+        
         if (domRefs) {
           if (domRefs.videoBitrate) domRefs.videoBitrate.textContent = videoReceiveBitrate;
           if (domRefs.videoRTT) domRefs.videoRTT.textContent = videoReceiveRTT;
@@ -354,7 +372,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
           if (domRefs.audioLoss) domRefs.audioLoss.textContent = audioReceiveLoss;
         }
 
-        console.log(`[collectStats] Peer ${peerId} stats updated - Video Bitrate: ${videoReceiveBitrate}, Audio Bitrate: ${audioReceiveBitrate}`);
+        // console.log(`[collectStats] Peer ${peerId} stats updated - Video Bitrate: ${videoReceiveBitrate}, Audio Bitrate: ${audioReceiveBitrate}`);
       });
     });
 
