@@ -84,6 +84,11 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const currentMeetingIdRef = useRef<string | null>(null);
   const [resolution, setResolution] = useState<'180p' | '360p' | '480p'>('180p');
 
+  // Store device IDs in Maps to maintain explicit mapping between options and device IDs
+  const cameraDeviceMapRef = useRef<Map<string, string>>(new Map());
+  const micDeviceMapRef = useRef<Map<string, string>>(new Map());
+  const speakerDeviceMapRef = useRef<Map<string, string>>(new Map());
+
   // Web Audio API for microphone gain control
   const audioContextRef = useRef<AudioContext | null>(null);
   const micGainNodeRef = useRef<GainNode | null>(null);
@@ -139,6 +144,22 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       const microphones = devices.filter(d => d.kind === 'audioinput');
       const speakers = devices.filter(d => d.kind === 'audiooutput');
 
+      // Populate device ID maps
+      cameraDeviceMapRef.current.clear();
+      cameras.forEach((device) => {
+        cameraDeviceMapRef.current.set(device.deviceId, device.deviceId);
+      });
+
+      micDeviceMapRef.current.clear();
+      microphones.forEach((device) => {
+        micDeviceMapRef.current.set(device.deviceId, device.deviceId);
+      });
+
+      speakerDeviceMapRef.current.clear();
+      speakers.forEach((device) => {
+        speakerDeviceMapRef.current.set(device.deviceId, device.deviceId);
+      });
+
       setAvailableDevices({ cameras, microphones, speakers });
 
       // Set initial device selections to first available device
@@ -151,8 +172,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       if (speakers.length > 0 && !selectedSpeakerId) {
         setSelectedSpeakerId(speakers[0].deviceId);
       }
-    } catch (error) {
-      console.error('[enumerateDevices] Failed to enumerate devices:', error);
+    } catch {
     }
   };
 
@@ -277,12 +297,9 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         let audioPacketsReceived = 0;
         let audioPacketsLost = 0;
 
-        // console.log(`[collectStats] Peer ${peerId} - Processing ${recvStats.length} stat reports`);
-
         recvStats.forEach((report: any) => {
           // ---------- VIDEO RECEIVE ----------
           if (report.type === 'inbound-rtp' && report.kind === 'video') {
-            console.log(`[collectStats] Peer ${peerId} VIDEO - bytesReceived: ${report.bytesReceived}, timestamp: ${report.timestamp}`);
             // Aggregate all video inbound-rtp reports
             totalVideoBytes += report.bytesReceived || 0;
             videoTimestamp = report.timestamp || 0;
@@ -292,7 +309,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
           // ---------- AUDIO RECEIVE ----------
           if (report.type === 'inbound-rtp' && report.kind === 'audio') {
-            console.log(`[collectStats] Peer ${peerId} AUDIO - bytesReceived: ${report.bytesReceived}, timestamp: ${report.timestamp}`);
             // Aggregate all audio inbound-rtp reports
             totalAudioBytes += report.bytesReceived || 0;
             audioTimestamp = report.timestamp || 0;
@@ -314,22 +330,14 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         // Calculate bitrate from aggregated video data
         if (videoTimestamp > 0) {
           const lastVideoRecv = lastRecvVideoRef.current[peerId];
-          console.log(`[collectStats] Peer ${peerId} VIDEO AGGREGATED - totalBytes: ${totalVideoBytes}, timestamp: ${videoTimestamp}, lastRecv:`, lastVideoRecv);
           if (lastVideoRecv && lastVideoRecv.timestamp > 0) {
             const timeDiffMs = videoTimestamp - lastVideoRecv.timestamp;
-            console.log(`  timeDiffMs: ${timeDiffMs}, bytesDiff: ${totalVideoBytes - lastVideoRecv.bytes}`);
             if (timeDiffMs > 0) {
               const bitrate = ((totalVideoBytes - lastVideoRecv.bytes) * 8) / (timeDiffMs / 1000);
-              console.log(`  bitrate: ${bitrate}, isFinite: ${isFinite(bitrate)}, >= 0: ${bitrate >= 0}`);
               if (isFinite(bitrate) && bitrate >= 0) {
                 videoReceiveBitrate = `${Math.floor(bitrate / 1000)} kbps`;
-                console.log(`🟢 VIDEO bitrate calculated: ${videoReceiveBitrate}`);
               }
-            } else {
-              console.log(`  ⚠️ timeDiffMs <= 0, skipping bitrate calculation`);
             }
-          } else {
-            console.log(`  ⚠️ First video measurement for this peer`);
           }
           // Store aggregated bytes for next cycle
           lastRecvVideoRef.current[peerId] = {
@@ -347,22 +355,14 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         // Calculate bitrate from aggregated audio data
         if (audioTimestamp > 0) {
           const lastAudioRecv = lastRecvAudioRef.current[peerId];
-          console.log(`[collectStats] Peer ${peerId} AUDIO AGGREGATED - totalBytes: ${totalAudioBytes}, timestamp: ${audioTimestamp}, lastRecv:`, lastAudioRecv);
           if (lastAudioRecv && lastAudioRecv.timestamp > 0) {
             const timeDiffMs = audioTimestamp - lastAudioRecv.timestamp;
-            console.log(`  timeDiffMs: ${timeDiffMs}, bytesDiff: ${totalAudioBytes - lastAudioRecv.bytes}`);
             if (timeDiffMs > 0) {
               const bitrate = ((totalAudioBytes - lastAudioRecv.bytes) * 8) / (timeDiffMs / 1000);
-              console.log(`  bitrate: ${bitrate}, isFinite: ${isFinite(bitrate)}, >= 0: ${bitrate >= 0}`);
               if (isFinite(bitrate) && bitrate >= 0) {
                 audioReceiveBitrate = `${Math.floor(bitrate / 1000)} kbps`;
-                console.log(`🟢 AUDIO bitrate calculated: ${audioReceiveBitrate}`);
               }
-            } else {
-              console.log(`  ⚠️ timeDiffMs <= 0, skipping bitrate calculation`);
             }
-          } else {
-            console.log(`  ⚠️ First audio measurement for this peer`);
           }
           // Store aggregated bytes for next cycle
           lastRecvAudioRef.current[peerId] = {
@@ -387,8 +387,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
         // Update DOM refs directly to avoid triggering re-renders
         const domRefs = peerStatsDomRefsRef.current[peerId];
-        console.log("🛑🛑🛑 ~~~ :349 ~~~ collectStats ~~~ domRefs:", domRefs);
-        
         if (domRefs) {
           if (domRefs.videoBitrate) domRefs.videoBitrate.textContent = videoReceiveBitrate;
           if (domRefs.videoRTT) domRefs.videoRTT.textContent = videoReceiveRTT;
@@ -397,8 +395,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
           if (domRefs.audioRTT) domRefs.audioRTT.textContent = audioReceiveRTT;
           if (domRefs.audioLoss) domRefs.audioLoss.textContent = audioReceiveLoss;
         }
-
-        // console.log(`[collectStats] Peer ${peerId} stats updated - Video Bitrate: ${videoReceiveBitrate}, Audio Bitrate: ${audioReceiveBitrate}`);
       });
     });
 
@@ -459,22 +455,17 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       return baseConstraints;
     };
 
-    console.log(`[startLocalStream] Using resolution: ${resolution}`);
-
     const audioConstraints: any = {};
     if (micId) {
       audioConstraints.deviceId = { exact: micId };
     }
 
     const videoConstraints = getVideoConstraints();
-    console.log(`[startLocalStream] Video constraints:`, videoConstraints);
 
     const stream = await navigator.mediaDevices.getUserMedia({
       video: videoConstraints,
       audio: audioConstraints
     });
-
-    console.log(`[startLocalStream] Got stream with video dimensions: ${stream.getVideoTracks()[0]?.getSettings().width}x${stream.getVideoTracks()[0]?.getSettings().height}`);
 
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = stream;
@@ -510,8 +501,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       micGainNodeRef.current = gainNode;
       micSourceRef.current = source;
 
-      console.log('[startLocalStream] Web Audio API setup completed for microphone');
-
       // Return the processed stream with gain control applied
       const processedStream = destination.stream;
       const videoTracks = stream.getVideoTracks();
@@ -523,8 +512,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         finalStream.addTrack(audioTracks[0]);
         return finalStream;
       }
-    } catch (error) {
-      console.warn('[startLocalStream] Web Audio API not available:', error);
+    } catch {
     }
 
     return stream;
@@ -535,21 +523,15 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     // This controls the gain of the microphone audio through Web Audio API
     const newState = !micInputEnabled;
 
-    console.log(`[Mic Input] Toggling from ${micInputEnabled} to ${newState}`);
-
     if (micGainNodeRef.current) {
       // Use GainNode to control microphone audio
       // When OFF (newState=false): set gain to 0 (mute)
       // When ON (newState=true): set gain to current volume level
       if (newState) {
         micGainNodeRef.current.gain.value = micInputVolume;
-        console.log(`[Mic Input] Enabled with volume: ${micInputVolume}`);
       } else {
         micGainNodeRef.current.gain.value = 0;
-        console.log('[Mic Input] Disabled (gain = 0)');
       }
-    } else {
-      console.warn('[Mic Input] Mic GainNode not found');
     }
 
     setMicInputEnabled(newState);
@@ -562,15 +544,13 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     // Apply the volume to the GainNode
     if (micGainNodeRef.current && micInputEnabled) {
       micGainNodeRef.current.gain.value = volume;
-      console.log(`[Mic Volume] Changed to ${volume.toFixed(2)}`);
     }
   };
 
-  const setupRemoteAudioGain = (stream: MediaStream, peerId?: string): void => {
+  const setupRemoteAudioGain = (stream: MediaStream): void => {
     try {
       const audioTracks = stream.getAudioTracks();
       if (audioTracks.length === 0) {
-        console.warn('[setupRemoteAudioGain] No audio tracks in stream');
         return;
       }
 
@@ -602,23 +582,13 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
           // CRITICAL: Mute the video element since audio is now routed through Web Audio API
           // This prevents double audio (both from video element and from gain node)
           const videoElements = document.querySelectorAll('[data-remote-video]');
-          let mutedElement = false;
           videoElements.forEach((el) => {
             const video = el as HTMLVideoElement;
             if (video.srcObject === stream) {
               video.volume = 0;
-              mutedElement = true;
-              console.log(
-                `[setupRemoteAudioGain] 🔇 Muted video element for peer ${peerId || 'unknown'}`
-              );
             }
           });
-
-          console.log(
-            `[setupRemoteAudioGain] ✅ Setup complete | gain: ${gainNode.gain.value}x | state: ${audioContext.state} | tracks: ${audioTracks.length} | muted: ${mutedElement}`
-          );
-        } catch (error) {
-          console.warn('[setupRemoteAudioGain] Failed to setup gain node:', error);
+        } catch {
         }
       };
 
@@ -631,8 +601,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       } else {
         setupGainNode();
       }
-    } catch (error) {
-      console.warn('[setupRemoteAudioGain] Failed to initialize audio context:', error);
+    } catch {
     }
   };
 
@@ -641,16 +610,13 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     // This controls the gain of remote audio through Web Audio API
     const newState = !speakerEnabled;
 
-    console.log(`[Speaker] Toggling from ${speakerEnabled} to ${newState}, peers count: ${Object.keys(peers).length}`);
-
     // Update gain nodes for all remote streams
     const audioContext = speakerAudioContextRef.current;
-    Object.entries(peers).forEach(([peerId, peerInfo]) => {
+    Object.entries(peers).forEach(([, peerInfo]) => {
       const gainNode = speakerGainNodesRef.current.get(peerInfo.stream);
       if (gainNode && audioContext && audioContext.state === 'running') {
         const targetGain = newState ? speakerVolume : 0;
         gainNode.gain.setValueAtTime(targetGain, audioContext.currentTime);
-        console.log(`[Speaker] 🔊 Updated gain for peer ${peerId}: ${targetGain.toFixed(2)}x`);
       }
 
       // Also disable/enable audio tracks at the MediaStream level as fallback
@@ -666,8 +632,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const handleSpeakerVolumeChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
     const volume = parseFloat(e.target.value);
     setSpeakerVolume(volume);
-
-    console.log(`[Speaker Volume] Changed to ${volume.toFixed(2)}`);
 
     // Apply the volume to all gain nodes
     if (speakerEnabled) {
@@ -698,211 +662,175 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
   const switchCameraDevice = async (deviceId: string): Promise<void> => {
     try {
-      if (!localStreamRef.current) {
-        setSelectedCameraId(deviceId);
+      // Verify device ID exists in map
+      if (!cameraDeviceMapRef.current.has(deviceId)) {
         return;
       }
 
-      console.log(`[switchCameraDevice] Switching camera to device: ${deviceId}`);
+      // Update state immediately so dropdown updates
+      setSelectedCameraId(deviceId);
+      setResolution('180p');
 
-      // Stop old video track first
+      if (!localStreamRef.current) {
+        return;
+      }
+
+      // Step 1: Stop the existing camera stream tracks
       const oldVideoTracks = localStreamRef.current.getVideoTracks();
       oldVideoTracks.forEach((track) => {
+        localStreamRef.current!.removeTrack(track);
         track.stop();
       });
 
-      // Wait 2 seconds to ensure device change is completed safely
-      console.log(`[switchCameraDevice] Waiting 2 seconds before connecting new camera...`);
+      // Step 2: Wait 2 seconds to ensure device is fully released
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      // Update selected camera ID
-      setSelectedCameraId(deviceId);
-      // Reset resolution to 180p (lowest quality) when switching cameras
-      setResolution('180p');
-
-      // Build video constraints with the current resolution
-      let videoConstraints: any;
-      switch (resolution) {
-        case '180p':
-          videoConstraints = { width: { ideal: 320 }, height: { ideal: 180 } };
-          break;
-        case '360p':
-          videoConstraints = { width: { ideal: 640 }, height: { ideal: 360 } };
-          break;
-        case '480p':
-          videoConstraints = { width: { ideal: 640 }, height: { ideal: 480 } };
-          break;
-        default:
-          videoConstraints = { width: { ideal: 320 }, height: { ideal: 180 } };
-          break;
-      }
-
-      if (deviceId) {
-        videoConstraints.deviceId = { exact: deviceId };
-      }
+      // Step 3: Build video constraints - use 180p when switching cameras
+      const videoConstraints: any = { width: { ideal: 320 }, height: { ideal: 180 }, deviceId: { exact: deviceId } };
 
       const audioConstraints: any = {};
-      if (selectedMicId) {
+      if (selectedMicId && micDeviceMapRef.current.has(selectedMicId)) {
         audioConstraints.deviceId = { exact: selectedMicId };
       }
 
+      // Step 4: Get new stream with the selected device
       const newStream = await navigator.mediaDevices.getUserMedia({
         video: videoConstraints,
         audio: audioConstraints,
       });
 
       const newVideoTrack = newStream.getVideoTracks()[0];
-
       if (!newVideoTrack) {
-        console.error('[switchCameraDevice] No video track in new stream');
         return;
       }
 
-      // Remove old tracks from stream
-      oldVideoTracks.forEach((track) => {
-        localStreamRef.current!.removeTrack(track);
-      });
-
-      // Add new video track
+      // Step 5: Add new video track to existing stream
       localStreamRef.current.addTrack(newVideoTrack);
 
-      // Update the video element
+      // Step 6: Update the local video element (no re-render, direct DOM update via ref)
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = localStreamRef.current;
       }
 
-      // If we've already joined, replace the producer track
+      // Step 7: If already joined, replace the producer track via replaceTrack()
+      // This updates remote peers' streams WITHOUT triggering re-render on their side
       if (joined && producerRef.current?.video) {
-        try {
-          await producerRef.current.video.replaceTrack({
-            track: newVideoTrack,
-          });
-          console.log('[switchCameraDevice] Successfully replaced video track in producer');
-        } catch (error) {
-          console.error('[switchCameraDevice] Failed to replace video track:', error);
-        }
+        await producerRef.current.video.replaceTrack({
+          track: newVideoTrack,
+        });
       }
 
-      // Clean up extra audio track if it was added
+      // Step 8: Clean up extra audio track if it was added
       const audioTracks = newStream.getAudioTracks();
       audioTracks.forEach((track) => {
         newStream.removeTrack(track);
         track.stop();
       });
-
-      console.log(`[switchCameraDevice] Camera switched successfully`);
-    } catch (error) {
-      console.error('[switchCameraDevice] Failed to switch camera:', error);
+    } catch {
     }
   };
 
   const switchMicDevice = async (deviceId: string): Promise<void> => {
     try {
-      if (!localStreamRef.current) {
-        setSelectedMicId(deviceId);
+      // Verify device ID exists in map
+      if (!micDeviceMapRef.current.has(deviceId)) {
         return;
       }
 
-      console.log(`[switchMicDevice] Switching microphone to device: ${deviceId}`);
+      // Update state immediately so dropdown updates
       setSelectedMicId(deviceId);
 
-      // Wait 2 seconds to ensure device change is completed safely
-      console.log(`[switchMicDevice] Waiting 2 seconds before connecting new microphone...`);
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      // Get new stream with the selected microphone
-      const newStream = await startLocalStream(selectedCameraId, deviceId);
-      const newAudioTrack = newStream.getAudioTracks()[0];
-
-      if (!newAudioTrack) {
-        console.error('[switchMicDevice] No audio track in new stream');
+      if (!localStreamRef.current) {
         return;
       }
 
-      // Replace the audio track in the local stream
+      // Step 1: Stop the existing microphone stream tracks
       const oldAudioTracks = localStreamRef.current.getAudioTracks();
       oldAudioTracks.forEach((track) => {
         localStreamRef.current!.removeTrack(track);
         track.stop();
       });
 
+      // Step 2: Wait 2 seconds to ensure device is fully released
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Step 3: Get new stream with the selected microphone
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        video: selectedCameraId ? { deviceId: { exact: selectedCameraId } } : false,
+        audio: { deviceId: { exact: deviceId } },
+      });
+
+      const newAudioTrack = newStream.getAudioTracks()[0];
+      if (!newAudioTrack) {
+        return;
+      }
+
+      // Step 4: Add new audio track to existing stream
       localStreamRef.current.addTrack(newAudioTrack);
 
-      // CRITICAL: Update the video element with the new stream
-      // This prevents the camera screen from turning off
+      // Step 5: Update the local video element (no re-render, direct DOM update via ref)
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = localStreamRef.current;
       }
 
-      // If we've already joined, replace the producer track
+      // Step 6: If already joined, replace the producer track via replaceTrack()
+      // This updates remote peers' streams WITHOUT triggering re-render on their side
       if (joined && producerRef.current?.audio) {
-        try {
-          await producerRef.current.audio.replaceTrack({
-            track: newAudioTrack,
-          });
-          console.log('[switchMicDevice] Successfully replaced audio track in producer');
-        } catch (error) {
-          console.error('[switchMicDevice] Failed to replace audio track:', error);
-        }
+        await producerRef.current.audio.replaceTrack({
+          track: newAudioTrack,
+        });
       }
 
-      // Clean up extra video track if it was added
+      // Step 7: Clean up extra video track if it was added
       const videoTracks = newStream.getVideoTracks();
       videoTracks.forEach((track) => {
         newStream.removeTrack(track);
         track.stop();
       });
 
-      // Re-setup Web Audio API for microphone gain control
+      // Step 8: Re-setup Web Audio API for microphone gain control
       if (audioContextRef.current && micGainNodeRef.current && micSourceRef.current) {
-        try {
-          // Disconnect old source
-          micSourceRef.current.disconnect();
+        // Disconnect old source
+        micSourceRef.current.disconnect();
 
-          // Create new source from the new audio track
-          const newSource = audioContextRef.current.createMediaStreamSource(
-            new MediaStream([newAudioTrack])
-          );
+        // Create new source from the new audio track
+        const newSource = audioContextRef.current.createMediaStreamSource(
+          new MediaStream([newAudioTrack])
+        );
 
-          // Reconnect with existing gain node
-          newSource.connect(micGainNodeRef.current);
+        // Reconnect with existing gain node
+        newSource.connect(micGainNodeRef.current);
 
-          micSourceRef.current = newSource;
-          console.log('[switchMicDevice] Re-setup Web Audio API for new microphone');
-        } catch (error) {
-          console.warn('[switchMicDevice] Failed to re-setup Web Audio API:', error);
-        }
+        micSourceRef.current = newSource;
       }
-    } catch (error) {
-      console.error('[switchMicDevice] Failed to switch microphone:', error);
+    } catch {
     }
   };
 
   const switchSpeakerDevice = async (deviceId: string): Promise<void> => {
     try {
-      console.log(`[switchSpeakerDevice] Switching speaker to device: ${deviceId}`);
+      // Verify device ID exists in map
+      if (deviceId && !speakerDeviceMapRef.current.has(deviceId)) {
+        return;
+      }
+
+      // Update state immediately so dropdown updates
       setSelectedSpeakerId(deviceId);
 
       // Wait 2 seconds to ensure device change is completed safely
-      console.log(`[switchSpeakerDevice] Waiting 2 seconds before connecting new speaker...`);
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      // Apply speaker device to all remote video elements
+      // Apply speaker device to all remote video elements (does not affect local stream)
       const remoteVideos = document.querySelectorAll('[data-remote-video]');
       remoteVideos.forEach((videoEl) => {
         const video = videoEl as HTMLVideoElement;
         if (deviceId && deviceId !== '' && 'setSinkId' in video) {
-          (video.setSinkId as (id: string) => Promise<void>)(deviceId)
-            .then(() => {
-              console.log(`[switchSpeakerDevice] Successfully set speaker device for video element`);
-            })
-            .catch((error) => {
-              console.error('[switchSpeakerDevice] Failed to set speaker device:', error);
-            });
+          (video.setSinkId as (id: string) => Promise<void>)(deviceId).catch(() => {
+            // Silently handle errors
+          });
         }
       });
-    } catch (error) {
-      console.error('[switchSpeakerDevice] Failed to switch speaker:', error);
+    } catch {
     }
   };
 
@@ -911,26 +839,19 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     const validResolutions = ['180p', '360p', '480p'];
     const resolution = validResolutions.includes(newResolution) ? newResolution : '180p';
 
-    if (newResolution !== resolution) {
-      console.log(`[handleResolutionChange] Invalid resolution ${newResolution}, falling back to ${resolution}`);
-    }
-
-    console.log(`[handleResolutionChange] Selected resolution: ${resolution}, Currently joined: ${joined}`);
+    // Update state immediately so dropdown updates
     setResolution(resolution);
 
-    // If not joined, just update the state
+    // If not joined, just return
     if (!joined || !producerRef.current?.video) {
-      console.log(`[handleResolutionChange] Not joined yet or no producer, state will be used on join`);
       return;
     }
 
     // If joined, restart camera with new resolution
     try {
-      console.log(`[handleResolutionChange] Changing resolution to ${newResolution}`);
-
       // Build video constraints directly (don't depend on async state update)
       let videoConstraints: any;
-      switch (newResolution) {
+      switch (resolution) {
         case '180p':
           videoConstraints = { width: { ideal: 320 }, height: { ideal: 180 } };
           break;
@@ -965,7 +886,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       const newVideoTrack = newStream.getVideoTracks()[0];
 
       if (!newVideoTrack) {
-        console.error('[handleResolutionChange] No video track in new stream');
         return;
       }
 
@@ -986,10 +906,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = localStreamRef.current;
       }
-
-      console.log(`[handleResolutionChange] Successfully changed resolution to ${newResolution}`);
-    } catch (error) {
-      console.error('[handleResolutionChange] Failed to change resolution:', error);
+    } catch {
     }
   };
 
@@ -1000,7 +917,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         return;
       }
 
-      console.log(`[handleJoin] Starting join with resolution state: ${resolution}`);
       socketRef.current = io(SIGNALING_SERVER);
       setJoined(true);
       const stream = await startLocalStream(selectedCameraId, selectedMicId);
@@ -1064,7 +980,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
                 // Setup remote audio gain if audio track was added
                 if (kind === 'audio') {
-                  setupRemoteAudioGain(newStream, peerId);
+                  setupRemoteAudioGain(newStream);
                 }
 
                 return {
@@ -1121,11 +1037,8 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       socketRef.current.on(
         'newConsumer',
         async ({ producerId, id, kind, userId: peerUserId, userName: peerUserName }) => {
-          console.log(`[newConsumer] Received ${kind} consumer from peer ${id}`);
-
           // Step 1: Create transport if it doesn't exist
           if (!consumerTransportsRef.current[id]) {
-            console.log(`[newConsumer] Creating new receive transport for peer ${id}`);
             const recvTransportData = await new Promise<TransportData>((resolve) =>
               socketRef.current?.emit('create-web-rtc-transport', { direction: 'recv' }, resolve)
             );
@@ -1159,19 +1072,16 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
             rtpParameters: consumerData.rtpParameters,
           });
 
-          console.log(`[newConsumer] Consumer created for ${kind}, adding track to peer ${id}`);
-
           // Step 3: Add track to peer's stream (or create new stream if first consumer)
           setPeers((prev) => {
             const existingPeer = prev[id];
             if (existingPeer) {
               // Add track to existing stream
               existingPeer.stream.addTrack(consumer.track);
-              console.log(`[newConsumer] Added ${kind} track to existing stream`);
 
               // Setup remote audio gain if audio track was just added
               if (kind === 'audio') {
-                setupRemoteAudioGain(existingPeer.stream, id);
+                setupRemoteAudioGain(existingPeer.stream);
               }
 
               return prev;
@@ -1179,11 +1089,10 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
               // Create new stream with first track
               const newStream = new MediaStream();
               newStream.addTrack(consumer.track);
-              console.log(`[newConsumer] Created new stream with ${kind} track`);
 
               // Setup remote audio gain if this is an audio track
               if (kind === 'audio') {
-                setupRemoteAudioGain(newStream, id);
+                setupRemoteAudioGain(newStream);
               }
 
               return {
