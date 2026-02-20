@@ -182,8 +182,9 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     console.log(`[detectSupportedResolutions] Supported resolutions for camera ${cameraId}:`, supported);
     setSupportedResolutions(supported.length > 0 ? supported : ['360p']);
 
-    // Set resolution to first supported one
-    if (supported.length > 0 && !supported.includes(resolution)) {
+    // Set resolution to first supported one (always)
+    if (supported.length > 0) {
+      console.log(`[detectSupportedResolutions] Setting default resolution to: ${supported[0]}`);
       setResolution(supported[0] as any);
     }
   };
