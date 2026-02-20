@@ -73,6 +73,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const [selectedCameraId, setSelectedCameraId] = useState<string>('');
   const [selectedMicId, setSelectedMicId] = useState<string>('');
   const [selectedSpeakerId, setSelectedSpeakerId] = useState<string>('');
+  const [supportedResolutions, setSupportedResolutions] = useState<string[]>(['360p', '480p', '720p']);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -132,6 +133,60 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const audioSendRTTRef = useRef<HTMLSpanElement>(null);
   const audioSendLossRef = useRef<HTMLSpanElement>(null);
 
+  const detectSupportedResolutions = async (cameraId: string): Promise<void> => {
+    const resolutionTests = [
+      { name: '360p', width: 640, height: 360 },
+      { name: '480p', width: 640, height: 480 },
+      { name: '720p', width: 1280, height: 720 },
+    ];
+
+    const supported: string[] = [];
+
+    for (const res of resolutionTests) {
+      try {
+        const constraints: MediaStreamConstraints = {
+          video: {
+            deviceId: { exact: cameraId },
+            width: { ideal: res.width },
+            height: { ideal: res.height },
+          },
+          audio: false,
+        };
+
+        const testStream = await navigator.mediaDevices.getUserMedia(constraints);
+        const videoTrack = testStream.getVideoTracks()[0];
+
+        if (videoTrack) {
+          const settings = videoTrack.getSettings();
+          // Validate that camera actually returns the requested resolution (with 10% tolerance)
+          if (settings.width !== undefined && settings.height !== undefined) {
+            const widthMatch = Math.abs(settings.width - res.width) <= res.width * 0.1;
+            const heightMatch = Math.abs(settings.height - res.height) <= res.height * 0.1;
+
+            if (widthMatch && heightMatch) {
+              console.log(`[detectSupportedResolutions] ${res.name}: ${settings.width}x${settings.height} ✓ (Supported)`);
+              supported.push(res.name);
+            } else {
+              console.log(`[detectSupportedResolutions] ${res.name}: Requested ${res.width}x${res.height}, got ${settings.width}x${settings.height} ✗ (Not supported)`);
+            }
+          }
+        }
+
+        testStream.getTracks().forEach(track => track.stop());
+      } catch (error) {
+        console.log(`[detectSupportedResolutions] ${res.name}: Not supported`);
+      }
+    }
+
+    console.log(`[detectSupportedResolutions] Supported resolutions for camera ${cameraId}:`, supported);
+    setSupportedResolutions(supported.length > 0 ? supported : ['360p']);
+
+    // Set resolution to first supported one
+    if (supported.length > 0 && !supported.includes(resolution)) {
+      setResolution(supported[0] as any);
+    }
+  };
+
   const enumerateDevices = async (): Promise<void> => {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
@@ -155,6 +210,13 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       console.error('[enumerateDevices] Failed to enumerate devices:', error);
     }
   };
+
+  // Detect supported resolutions when camera is selected
+  useEffect(() => {
+    if (selectedCameraId) {
+      detectSupportedResolutions(selectedCameraId);
+    }
+  }, [selectedCameraId]);
 
   // Enumerate devices on mount
   useEffect(() => {
@@ -457,15 +519,22 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       return baseConstraints;
     };
 
+    console.log(`[startLocalStream] Using resolution: ${resolution}`);
+
     const audioConstraints: any = {};
     if (micId) {
       audioConstraints.deviceId = { exact: micId };
     }
 
+    const videoConstraints = getVideoConstraints();
+    console.log(`[startLocalStream] Video constraints:`, videoConstraints);
+
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: getVideoConstraints(),
+      video: videoConstraints,
       audio: audioConstraints
     });
+
+    console.log(`[startLocalStream] Got stream with video dimensions: ${stream.getVideoTracks()[0]?.getSettings().width}x${stream.getVideoTracks()[0]?.getSettings().height}`);
 
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = stream;
@@ -771,6 +840,12 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
       localStreamRef.current.addTrack(newAudioTrack);
 
+      // CRITICAL: Update the video element with the new stream
+      // This prevents the camera screen from turning off
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = localStreamRef.current;
+      }
+
       // If we've already joined, replace the producer track
       if (joined && producerRef.current?.audio) {
         try {
@@ -840,10 +915,12 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   };
 
   const handleResolutionChange = async (newResolution: '360p' | '480p' | '720p'): Promise<void> => {
+    console.log(`[handleResolutionChange] Selected resolution: ${newResolution}, Currently joined: ${joined}`);
     setResolution(newResolution);
 
     // If not joined, just update the state
     if (!joined || !producerRef.current?.video) {
+      console.log(`[handleResolutionChange] Not joined yet or no producer, state will be used on join`);
       return;
     }
 
@@ -851,7 +928,33 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     try {
       console.log(`[handleResolutionChange] Changing resolution to ${newResolution}`);
 
-      const newStream = await startLocalStream(selectedCameraId, selectedMicId);
+      // Build video constraints directly (don't depend on async state update)
+      let videoConstraints: any;
+      switch (newResolution) {
+        case '360p':
+          videoConstraints = { width: { min: 480, ideal: 640 }, height: { min: 350, ideal: 360, max: 370 } };
+          break;
+        case '480p':
+          videoConstraints = { width: { min: 600, ideal: 640 }, height: { min: 470, ideal: 480, max: 490 } };
+          break;
+        case '720p':
+        default:
+          videoConstraints = { width: { min: 1200, ideal: 1280 }, height: { min: 700, ideal: 720, max: 750 } };
+          break;
+      }
+
+      // Get audio constraints
+      const audioConstraints: any = {};
+      if (selectedMicId) {
+        audioConstraints.deviceId = { exact: selectedMicId };
+      }
+
+      // Get new stream with new resolution
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints,
+        audio: audioConstraints,
+      });
+
       const newVideoTrack = newStream.getVideoTracks()[0];
 
       if (!newVideoTrack) {
@@ -863,6 +966,19 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       await producerRef.current.video.replaceTrack({
         track: newVideoTrack,
       });
+
+      // Update local video ref with new stream
+      const oldVideoTracks = localStreamRef.current?.getVideoTracks() || [];
+      oldVideoTracks.forEach((track) => {
+        localStreamRef.current?.removeTrack(track);
+        track.stop();
+      });
+
+      localStreamRef.current?.addTrack(newVideoTrack);
+
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = localStreamRef.current;
+      }
 
       console.log(`[handleResolutionChange] Successfully changed resolution to ${newResolution}`);
     } catch (error) {
@@ -877,6 +993,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         return;
       }
 
+      console.log(`[handleJoin] Starting join with resolution state: ${resolution}`);
       socketRef.current = io(SIGNALING_SERVER);
       setJoined(true);
       const stream = await startLocalStream(selectedCameraId, selectedMicId);
@@ -1196,9 +1313,9 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
           <select style={styles.resolutionSelect}
             value={resolution}
             onChange={(e) => handleResolutionChange(e.target.value as any)}>
-            <option>360p</option>
-            <option>480p</option>
-            <option>720p</option>
+            {supportedResolutions.map((res) => (
+              <option key={res} value={res}>{res}</option>
+            ))}
           </select>
 
           <select
