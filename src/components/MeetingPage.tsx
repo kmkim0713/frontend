@@ -768,7 +768,21 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       }
 
       console.log(`[switchCameraDevice] Switching camera to device: ${deviceId}`);
+
+      // Stop old video track first
+      const oldVideoTracks = localStreamRef.current.getVideoTracks();
+      oldVideoTracks.forEach((track) => {
+        track.stop();
+      });
+
+      // Wait 500ms for old track to fully release
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Now update camera selection and detect resolutions
       setSelectedCameraId(deviceId);
+
+      // Wait 1.5s more to allow detectSupportedResolutions to complete
+      await new Promise(resolve => setTimeout(resolve, 1500));
 
       // Get new stream with the selected camera
       const newStream = await startLocalStream(deviceId, selectedMicId);
@@ -779,13 +793,12 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         return;
       }
 
-      // Replace the video track in the local stream
-      const oldVideoTracks = localStreamRef.current.getVideoTracks();
+      // Remove old tracks from stream
       oldVideoTracks.forEach((track) => {
         localStreamRef.current!.removeTrack(track);
-        track.stop();
       });
 
+      // Add new video track
       localStreamRef.current.addTrack(newVideoTrack);
 
       // Update the video element
@@ -811,6 +824,8 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         newStream.removeTrack(track);
         track.stop();
       });
+
+      console.log('[switchCameraDevice] Camera switched successfully');
     } catch (error) {
       console.error('[switchCameraDevice] Failed to switch camera:', error);
     }
