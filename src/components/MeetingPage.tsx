@@ -93,6 +93,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const micGainNodeRef = useRef<GainNode | null>(null);
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const micDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
 
   // Web Audio API for speaker gain control
   const speakerAudioContextRef = useRef<AudioContext | null>(null);
@@ -467,6 +468,12 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       audio: audioConstraints
     });
 
+    // Set camera track state based on current button state
+    const videoTracks = stream.getVideoTracks();
+    videoTracks.forEach((track) => {
+      track.enabled = cameraEnabled;
+    });
+
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = stream;
     }
@@ -487,7 +494,8 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
       // Create gain node for controlling microphone volume
       const gainNode = audioContext.createGain();
-      gainNode.gain.value = micInputVolume;
+      // Set gain based on current mic input state and volume
+      gainNode.gain.value = micInputEnabled ? micInputVolume : 0;
 
       // Create a destination to capture processed audio
       const destination = audioContext.createMediaStreamDestination();
@@ -500,16 +508,17 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
       audioContextRef.current = audioContext;
       micGainNodeRef.current = gainNode;
       micSourceRef.current = source;
+      micDestinationRef.current = destination;
 
       // Return the processed stream with gain control applied
       const processedStream = destination.stream;
-      const videoTracks = stream.getVideoTracks();
-      const audioTracks = processedStream.getAudioTracks();
+      const processedVideoTracks = stream.getVideoTracks();
+      const processedAudioTracks = processedStream.getAudioTracks();
 
-      if (audioTracks.length > 0 && videoTracks.length > 0) {
+      if (processedAudioTracks.length > 0 && processedVideoTracks.length > 0) {
         const finalStream = new MediaStream();
-        finalStream.addTrack(videoTracks[0]);
-        finalStream.addTrack(audioTracks[0]);
+        finalStream.addTrack(processedVideoTracks[0]);
+        finalStream.addTrack(processedAudioTracks[0]);
         return finalStream;
       }
     } catch {
@@ -704,15 +713,18 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         return;
       }
 
-      // Step 5: Add new video track to existing stream
+      // Step 5: Set video track enabled state to match current button state
+      newVideoTrack.enabled = cameraEnabled;
+
+      // Step 6: Add new video track to existing stream
       localStreamRef.current.addTrack(newVideoTrack);
 
-      // Step 6: Update the local video element (no re-render, direct DOM update via ref)
+      // Step 7: Update the local video element (no re-render, direct DOM update via ref)
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = localStreamRef.current;
       }
 
-      // Step 7: If already joined, replace the producer track via replaceTrack()
+      // Step 8: If already joined, replace the producer track via replaceTrack()
       // This updates remote peers' streams WITHOUT triggering re-render on their side
       if (joined && producerRef.current?.video) {
         await producerRef.current.video.replaceTrack({
@@ -720,7 +732,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         });
       }
 
-      // Step 8: Clean up extra audio track if it was added
+      // Step 9: Clean up extra audio track if it was added
       const audioTracks = newStream.getAudioTracks();
       audioTracks.forEach((track) => {
         newStream.removeTrack(track);
@@ -765,31 +777,9 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         return;
       }
 
-      // Step 4: Add new audio track to existing stream
-      localStreamRef.current.addTrack(newAudioTrack);
-
-      // Step 5: Update the local video element (no re-render, direct DOM update via ref)
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = localStreamRef.current;
-      }
-
-      // Step 6: If already joined, replace the producer track via replaceTrack()
-      // This updates remote peers' streams WITHOUT triggering re-render on their side
-      if (joined && producerRef.current?.audio) {
-        await producerRef.current.audio.replaceTrack({
-          track: newAudioTrack,
-        });
-      }
-
-      // Step 7: Clean up extra video track if it was added
-      const videoTracks = newStream.getVideoTracks();
-      videoTracks.forEach((track) => {
-        newStream.removeTrack(track);
-        track.stop();
-      });
-
-      // Step 8: Re-setup Web Audio API for microphone gain control
-      if (audioContextRef.current && micGainNodeRef.current && micSourceRef.current) {
+      // Step 4: Re-setup Web Audio API for microphone gain control with the new track
+      let processedAudioTrack: MediaStreamTrack | null = null;
+      if (audioContextRef.current && micGainNodeRef.current && micSourceRef.current && micDestinationRef.current) {
         // Disconnect old source
         micSourceRef.current.disconnect();
 
@@ -798,11 +788,49 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
           new MediaStream([newAudioTrack])
         );
 
-        // Reconnect with existing gain node
+        // Reconnect with existing gain node and destination
         newSource.connect(micGainNodeRef.current);
 
+        // Restore gain state based on current mic input enabled state
+        micGainNodeRef.current.gain.value = micInputEnabled ? micInputVolume : 0;
+
         micSourceRef.current = newSource;
+
+        // Get the processed audio from the destination (source -> gainNode -> destination)
+        const processedAudioTracks = micDestinationRef.current.stream.getAudioTracks();
+        processedAudioTrack = processedAudioTracks[0] || null;
       }
+
+      if (!processedAudioTrack) {
+        return;
+      }
+
+      // Step 5: Add processed audio track to existing stream (NOT the raw track)
+      localStreamRef.current.addTrack(processedAudioTrack);
+
+      // Step 6: Update the local video element (no re-render, direct DOM update via ref)
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = localStreamRef.current;
+      }
+
+      // Step 7: If already joined, replace the producer track with processed audio via replaceTrack()
+      // This ensures MIC ON/OFF toggle works correctly and remote peers are updated
+      if (joined && producerRef.current?.audio) {
+        await producerRef.current.audio.replaceTrack({
+          track: processedAudioTrack,
+        });
+      }
+
+      // Step 8: Clean up extra video tracks from the temporary stream
+      // NOTE: We do NOT stop newAudioTrack because it's the input to the Web Audio API!
+      // It will be properly stopped when we switch devices again or leave the call.
+      const videoTracks = newStream.getVideoTracks();
+      videoTracks.forEach((track) => {
+        newStream.removeTrack(track);
+        track.stop();
+      });
+      // Remove the audio track from the temporary stream (but don't stop it)
+      newStream.removeTrack(newAudioTrack);
     } catch {
     }
   };
@@ -1145,6 +1173,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     }
     micGainNodeRef.current = null;
     micSourceRef.current = null;
+    micDestinationRef.current = null;
 
     if (speakerAudioContextRef.current) {
       speakerAudioContextRef.current.close();
