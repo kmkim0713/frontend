@@ -51,6 +51,14 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const [speakerEnabled, setSpeakerEnabled] = useState<boolean>(true);
   const [micInputVolume, setMicInputVolume] = useState<number>(1.0);
   const [speakerVolume, setSpeakerVolume] = useState<number>(1.0);
+  const [availableDevices, setAvailableDevices] = useState<{
+    cameras: MediaDeviceInfo[];
+    microphones: MediaDeviceInfo[];
+    speakers: MediaDeviceInfo[];
+  }>({ cameras: [], microphones: [], speakers: [] });
+  const [selectedCameraId, setSelectedCameraId] = useState<string>('');
+  const [selectedMicId, setSelectedMicId] = useState<string>('');
+  const [selectedSpeakerId, setSelectedSpeakerId] = useState<string>('');
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -89,6 +97,44 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   const receiveRTTRef = useRef<HTMLSpanElement>(null);
   const receiveLossRef = useRef<HTMLSpanElement>(null);
   const localResolutionRef = useRef<HTMLSpanElement>(null);
+
+  const enumerateDevices = async (): Promise<void> => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cameras = devices.filter(d => d.kind === 'videoinput');
+      const microphones = devices.filter(d => d.kind === 'audioinput');
+      const speakers = devices.filter(d => d.kind === 'audiooutput');
+
+      setAvailableDevices({ cameras, microphones, speakers });
+
+      // Set initial device selections to first available device
+      if (cameras.length > 0 && !selectedCameraId) {
+        setSelectedCameraId(cameras[0].deviceId);
+      }
+      if (microphones.length > 0 && !selectedMicId) {
+        setSelectedMicId(microphones[0].deviceId);
+      }
+      if (speakers.length > 0 && !selectedSpeakerId) {
+        setSelectedSpeakerId(speakers[0].deviceId);
+      }
+    } catch (error) {
+      console.error('[enumerateDevices] Failed to enumerate devices:', error);
+    }
+  };
+
+  // Enumerate devices on mount
+  useEffect(() => {
+    enumerateDevices();
+
+    // Listen for device changes
+    const handleDeviceChange = (): void => {
+      enumerateDevices();
+    };
+    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+    return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+    };
+  }, []);
 
   const collectStats = async () => {
     let sendBitrate = '-';
@@ -232,22 +278,35 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
   }, [joined]);
 
 
-  const startLocalStream = async (): Promise<MediaStream> => {
+  const startLocalStream = async (cameraId?: string, micId?: string): Promise<MediaStream> => {
     const getVideoConstraints = () => {
+      let baseConstraints;
       switch (resolution) {
         case '360p':
-          return { width: { ideal: 640 }, height: { ideal: 360 } };
+          baseConstraints = { width: { ideal: 640 }, height: { ideal: 360 } };
+          break;
         case '480p':
-          return { width: { ideal: 640 }, height: { ideal: 480 } };
+          baseConstraints = { width: { ideal: 640 }, height: { ideal: 480 } };
+          break;
         case '720p':
         default:
-          return { width: { ideal: 1280 }, height: { ideal: 720 } };
+          baseConstraints = { width: { ideal: 1280 }, height: { ideal: 720 } };
+          break;
       }
+      if (cameraId) {
+        return { ...baseConstraints, deviceId: { exact: cameraId } };
+      }
+      return baseConstraints;
     };
+
+    const audioConstraints: any = {};
+    if (micId) {
+      audioConstraints.deviceId = { exact: micId };
+    }
 
     const stream = await navigator.mediaDevices.getUserMedia({
       video: getVideoConstraints(),
-      audio: true
+      audio: audioConstraints
     });
 
     if (localVideoRef.current) {
@@ -407,6 +466,158 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
     setCameraEnabled(newState);
   };
 
+  const switchCameraDevice = async (deviceId: string): Promise<void> => {
+    try {
+      if (!localStreamRef.current) {
+        setSelectedCameraId(deviceId);
+        return;
+      }
+
+      console.log(`[switchCameraDevice] Switching camera to device: ${deviceId}`);
+      setSelectedCameraId(deviceId);
+
+      // Get new stream with the selected camera
+      const newStream = await startLocalStream(deviceId, selectedMicId);
+      const newVideoTrack = newStream.getVideoTracks()[0];
+
+      if (!newVideoTrack) {
+        console.error('[switchCameraDevice] No video track in new stream');
+        return;
+      }
+
+      // Replace the video track in the local stream
+      const oldVideoTracks = localStreamRef.current.getVideoTracks();
+      oldVideoTracks.forEach((track) => {
+        localStreamRef.current!.removeTrack(track);
+        track.stop();
+      });
+
+      localStreamRef.current.addTrack(newVideoTrack);
+
+      // Update the video element
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = localStreamRef.current;
+      }
+
+      // If we've already joined, replace the producer track
+      if (joined && producerRef.current?.video) {
+        try {
+          await producerRef.current.video.replaceTrack({
+            track: newVideoTrack,
+          });
+          console.log('[switchCameraDevice] Successfully replaced video track in producer');
+        } catch (error) {
+          console.error('[switchCameraDevice] Failed to replace video track:', error);
+        }
+      }
+
+      // Clean up extra audio track if it was added
+      const audioTracks = newStream.getAudioTracks();
+      audioTracks.forEach((track) => {
+        newStream.removeTrack(track);
+        track.stop();
+      });
+    } catch (error) {
+      console.error('[switchCameraDevice] Failed to switch camera:', error);
+    }
+  };
+
+  const switchMicDevice = async (deviceId: string): Promise<void> => {
+    try {
+      if (!localStreamRef.current) {
+        setSelectedMicId(deviceId);
+        return;
+      }
+
+      console.log(`[switchMicDevice] Switching microphone to device: ${deviceId}`);
+      setSelectedMicId(deviceId);
+
+      // Get new stream with the selected microphone
+      const newStream = await startLocalStream(selectedCameraId, deviceId);
+      const newAudioTrack = newStream.getAudioTracks()[0];
+
+      if (!newAudioTrack) {
+        console.error('[switchMicDevice] No audio track in new stream');
+        return;
+      }
+
+      // Replace the audio track in the local stream
+      const oldAudioTracks = localStreamRef.current.getAudioTracks();
+      oldAudioTracks.forEach((track) => {
+        localStreamRef.current!.removeTrack(track);
+        track.stop();
+      });
+
+      localStreamRef.current.addTrack(newAudioTrack);
+
+      // If we've already joined, replace the producer track
+      if (joined && producerRef.current?.audio) {
+        try {
+          await producerRef.current.audio.replaceTrack({
+            track: newAudioTrack,
+          });
+          console.log('[switchMicDevice] Successfully replaced audio track in producer');
+        } catch (error) {
+          console.error('[switchMicDevice] Failed to replace audio track:', error);
+        }
+      }
+
+      // Clean up extra video track if it was added
+      const videoTracks = newStream.getVideoTracks();
+      videoTracks.forEach((track) => {
+        newStream.removeTrack(track);
+        track.stop();
+      });
+
+      // Re-setup Web Audio API for microphone gain control
+      if (audioContextRef.current && micGainNodeRef.current && micSourceRef.current) {
+        try {
+          // Disconnect old source
+          micSourceRef.current.disconnect();
+
+          // Create new source from the new audio track
+          const newSource = audioContextRef.current.createMediaStreamSource(
+            new MediaStream([newAudioTrack])
+          );
+
+          // Reconnect with existing gain node
+          newSource.connect(micGainNodeRef.current);
+
+          micSourceRef.current = newSource;
+          console.log('[switchMicDevice] Re-setup Web Audio API for new microphone');
+        } catch (error) {
+          console.warn('[switchMicDevice] Failed to re-setup Web Audio API:', error);
+        }
+      }
+    } catch (error) {
+      console.error('[switchMicDevice] Failed to switch microphone:', error);
+    }
+  };
+
+  const switchSpeakerDevice = async (deviceId: string): Promise<void> => {
+    try {
+      console.log(`[switchSpeakerDevice] Switching speaker to device: ${deviceId}`);
+      setSelectedSpeakerId(deviceId);
+
+      // Apply speaker device to all remote video elements
+      const remoteVideos = document.querySelectorAll('[data-remote-video]');
+      remoteVideos.forEach((videoEl) => {
+        const video = videoEl as HTMLVideoElement;
+        if (deviceId && deviceId !== '' && 'setSinkId' in video) {
+          (video.setSinkId as (id: string) => Promise<void>)(deviceId)
+            .then(() => {
+              console.log(`[switchSpeakerDevice] Successfully set speaker device for video element`);
+            })
+            .catch((error) => {
+              console.error('[switchSpeakerDevice] Failed to set speaker device:', error);
+            });
+        }
+      });
+    } catch (error) {
+      console.error('[switchSpeakerDevice] Failed to switch speaker:', error);
+    }
+  };
+
   const handleJoin = async (): Promise<void> => {
     if (socketRef.current === null) {
       if (!meetingId.trim()) {
@@ -416,7 +627,7 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
 
       socketRef.current = io(SIGNALING_SERVER);
       setJoined(true);
-      const stream = await startLocalStream();
+      const stream = await startLocalStream(selectedCameraId, selectedMicId);
 
       currentMeetingIdRef.current = meetingId;
 
@@ -581,6 +792,20 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
               const newStream = new MediaStream();
               newStream.addTrack(consumer.track);
               console.log(`[newConsumer] Created new stream with ${kind} track`);
+
+              // Set speaker device for audio tracks if available
+              if (kind === 'audio' && selectedSpeakerId && selectedSpeakerId !== '') {
+                setTimeout(() => {
+                  const videoEl = document.querySelector(`[data-remote-video-${id}]`) as HTMLVideoElement;
+                  if (videoEl && 'setSinkId' in videoEl) {
+                    (videoEl.setSinkId as (id: string) => Promise<void>)(selectedSpeakerId)
+                      .catch((error) => {
+                        console.warn(`[newConsumer] Failed to set sink ID for peer ${id}:`, error);
+                      });
+                  }
+                }, 100);
+              }
+
               return {
                 ...prev,
                 [id]: {
@@ -717,7 +942,48 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
             <option>720p</option>
           </select>
 
-          <div style={styles.buttonGroup}>
+          <select
+            style={styles.deviceSelect}
+            value={selectedCameraId}
+            onChange={(e) => switchCameraDevice(e.target.value)}
+          >
+            <option value="">카메라 선택</option>
+            {availableDevices.cameras.map((device) => (
+              <option key={device.deviceId} value={device.deviceId}>
+                {device.label || `Camera ${device.deviceId.slice(0, 5)}`}
+              </option>
+            ))}
+          </select>
+
+          <select
+            style={styles.deviceSelect}
+            value={selectedMicId}
+            onChange={(e) => switchMicDevice(e.target.value)}
+          >
+            <option value="">마이크 선택</option>
+            {availableDevices.microphones.map((device) => (
+              <option key={device.deviceId} value={device.deviceId}>
+                {device.label || `Microphone ${device.deviceId.slice(0, 5)}`}
+              </option>
+            ))}
+          </select>
+
+          <select
+            style={styles.deviceSelect}
+            value={selectedSpeakerId}
+            onChange={(e) => switchSpeakerDevice(e.target.value)}
+          >
+            <option value="">스피커 선택</option>
+            {availableDevices.speakers.map((device) => (
+              <option key={device.deviceId} value={device.deviceId}>
+                {device.label || `Speaker ${device.deviceId.slice(0, 5)}`}
+              </option>
+            ))}
+          </select>
+
+          
+        </div>
+        <div style={styles.buttonGroup}>
             {!joined && (
               <button onClick={handleJoin} style={styles.joinButton}>
                 JOIN
@@ -777,7 +1043,6 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
               LOGOUT
             </button>
           </div>
-        </div>
 
         {joined && (
           <div style={styles.videoGrid}>
@@ -795,11 +1060,20 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
               <div key={id} style={styles.videoTile}>
                 <video
                   ref={(el) => {
-                    if (el) el.srcObject = peerInfo.stream;
+                    if (el) {
+                      el.srcObject = peerInfo.stream;
+                      // Apply current speaker device if available
+                      if (selectedSpeakerId && selectedSpeakerId !== '' && 'setSinkId' in el) {
+                        (el.setSinkId as (id: string) => Promise<void>)(selectedSpeakerId).catch(() => {
+                          // Silently handle errors
+                        });
+                      }
+                    }
                   }}
                   autoPlay
                   playsInline
                   data-remote-video
+                  data-remote-video-id={id}
                   style={styles.video}
                 />
                 <div style={styles.videoLabel}>

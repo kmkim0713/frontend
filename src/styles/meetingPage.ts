@@ -105,11 +105,22 @@ export const styles = {
     cursor: 'pointer',
     minWidth: '100px',
   } as React.CSSProperties,
+  deviceSelect: {
+    background: 'var(--bg-input)',
+    color: 'var(--text-primary)',
+    border: '1px solid var(--border-input)',
+    borderRadius: '6px',
+    padding: '10px 12px',
+    fontSize: '12px',
+    cursor: 'pointer',
+    minWidth: '140px',
+  } as React.CSSProperties,
   buttonGroup: {
     display: 'flex',
     gap: '8px',
     flexWrap: 'wrap',
     flex: 1,
+    marginBottom: '20px'
   } as React.CSSProperties,
   joinButton: {
     background: 'var(--btn-primary)',
