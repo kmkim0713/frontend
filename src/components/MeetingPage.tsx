@@ -265,79 +265,39 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
         let audioReceiveRTT = '-';
         let audioReceiveLoss = '-';
 
+        // Aggregate all VIDEO inbound-rtp reports (handles multiple SSRCs/codecs)
+        let totalVideoBytes = 0;
+        let videoTimestamp = 0;
+        let videoPacketsReceived = 0;
+        let videoPacketsLost = 0;
+
+        // Aggregate all AUDIO inbound-rtp reports (handles multiple SSRCs/codecs)
+        let totalAudioBytes = 0;
+        let audioTimestamp = 0;
+        let audioPacketsReceived = 0;
+        let audioPacketsLost = 0;
+
         // console.log(`[collectStats] Peer ${peerId} - Processing ${recvStats.length} stat reports`);
 
         recvStats.forEach((report: any) => {
           // ---------- VIDEO RECEIVE ----------
           if (report.type === 'inbound-rtp' && report.kind === 'video') {
             console.log(`[collectStats] Peer ${peerId} VIDEO - bytesReceived: ${report.bytesReceived}, timestamp: ${report.timestamp}`);
-            const lastRecv = lastRecvVideoRef.current[peerId];
-            console.log(`  lastRecv:`, lastRecv);
-            if (lastRecv && lastRecv.timestamp > 0) {
-              const timeDiffMs = report.timestamp - lastRecv.timestamp;
-              console.log(`  timeDiffMs: ${timeDiffMs}, bytesDiff: ${report.bytesReceived - lastRecv.bytes}`);
-              if (timeDiffMs > 0) {
-                const bitrate = ((report.bytesReceived - lastRecv.bytes) * 8) / (timeDiffMs / 1000);
-                console.log(`  bitrate: ${bitrate}, isFinite: ${isFinite(bitrate)}, >= 0: ${bitrate >= 0}`);
-                if (isFinite(bitrate) && bitrate >= 0) {
-                  videoReceiveBitrate = `${Math.floor(bitrate / 1000)} kbps`;
-                  console.log(`🟢 videoReceiveBitrate`, videoReceiveBitrate)
-                }
-              } else {
-                console.log(`  ⚠️ timeDiffMs <= 0, skipping bitrate calculation`);
-              }
-            } else {
-              console.log(`  ⚠️ No lastRecv or timestamp <= 0, first measurement`);
-            }
-
-            // Always update the last measurement for next collection cycle
-            lastRecvVideoRef.current[peerId] = {
-              bytes: report.bytesReceived || 0,
-              timestamp: report.timestamp || 0,
-            };
-
-            if (report.packetsReceived !== undefined) {
-              const packetsLost = report.packetsLost || 0;
-              const total = report.packetsReceived + packetsLost;
-              const loss = total > 0 ? (packetsLost / total) * 100 : 0;
-              videoReceiveLoss = `${loss.toFixed(2)} %`;
-            }
+            // Aggregate all video inbound-rtp reports
+            totalVideoBytes += report.bytesReceived || 0;
+            videoTimestamp = report.timestamp || 0;
+            videoPacketsReceived += report.packetsReceived || 0;
+            videoPacketsLost += report.packetsLost || 0;
           }
 
           // ---------- AUDIO RECEIVE ----------
           if (report.type === 'inbound-rtp' && report.kind === 'audio') {
             console.log(`[collectStats] Peer ${peerId} AUDIO - bytesReceived: ${report.bytesReceived}, timestamp: ${report.timestamp}`);
-            const lastRecv = lastRecvAudioRef.current[peerId];
-            console.log(`  lastRecv:`, lastRecv);
-            if (lastRecv && lastRecv.timestamp > 0) {
-              const timeDiffMs = report.timestamp - lastRecv.timestamp;
-              console.log(`  timeDiffMs: ${timeDiffMs}, bytesDiff: ${report.bytesReceived - lastRecv.bytes}`);
-              if (timeDiffMs > 0) {
-                const bitrate = ((report.bytesReceived - lastRecv.bytes) * 8) / (timeDiffMs / 1000);
-                console.log(`  bitrate: ${bitrate}, isFinite: ${isFinite(bitrate)}, >= 0: ${bitrate >= 0}`);
-                if (isFinite(bitrate) && bitrate >= 0) {
-                  audioReceiveBitrate = `${Math.floor(bitrate / 1000)} kbps`;
-                  console.log(`🟢 audioReceiveBitrate`, audioReceiveBitrate)
-                }
-              } else {
-                console.log(`  ⚠️ timeDiffMs <= 0, skipping bitrate calculation`);
-              }
-            } else {
-              console.log(`  ⚠️ No lastRecv or timestamp <= 0, first measurement`);
-            }
-
-            // Always update the last measurement for next collection cycle
-            lastRecvAudioRef.current[peerId] = {
-              bytes: report.bytesReceived || 0,
-              timestamp: report.timestamp || 0,
-            };
-
-            if (report.packetsReceived !== undefined) {
-              const packetsLost = report.packetsLost || 0;
-              const total = report.packetsReceived + packetsLost;
-              const loss = total > 0 ? (packetsLost / total) * 100 : 0;
-              audioReceiveLoss = `${loss.toFixed(2)} %`;
-            }
+            // Aggregate all audio inbound-rtp reports
+            totalAudioBytes += report.bytesReceived || 0;
+            audioTimestamp = report.timestamp || 0;
+            audioPacketsReceived += report.packetsReceived || 0;
+            audioPacketsLost += report.packetsLost || 0;
           }
 
           // ---------- RTT ----------
@@ -350,6 +310,72 @@ const MeetingPage: FC<MeetingPageProps> = ({ user, onLeaveApp }) => {
             }
           }
         });
+
+        // Calculate bitrate from aggregated video data
+        if (videoTimestamp > 0) {
+          const lastVideoRecv = lastRecvVideoRef.current[peerId];
+          console.log(`[collectStats] Peer ${peerId} VIDEO AGGREGATED - totalBytes: ${totalVideoBytes}, timestamp: ${videoTimestamp}, lastRecv:`, lastVideoRecv);
+          if (lastVideoRecv && lastVideoRecv.timestamp > 0) {
+            const timeDiffMs = videoTimestamp - lastVideoRecv.timestamp;
+            console.log(`  timeDiffMs: ${timeDiffMs}, bytesDiff: ${totalVideoBytes - lastVideoRecv.bytes}`);
+            if (timeDiffMs > 0) {
+              const bitrate = ((totalVideoBytes - lastVideoRecv.bytes) * 8) / (timeDiffMs / 1000);
+              console.log(`  bitrate: ${bitrate}, isFinite: ${isFinite(bitrate)}, >= 0: ${bitrate >= 0}`);
+              if (isFinite(bitrate) && bitrate >= 0) {
+                videoReceiveBitrate = `${Math.floor(bitrate / 1000)} kbps`;
+                console.log(`🟢 VIDEO bitrate calculated: ${videoReceiveBitrate}`);
+              }
+            } else {
+              console.log(`  ⚠️ timeDiffMs <= 0, skipping bitrate calculation`);
+            }
+          } else {
+            console.log(`  ⚠️ First video measurement for this peer`);
+          }
+          // Store aggregated bytes for next cycle
+          lastRecvVideoRef.current[peerId] = {
+            bytes: totalVideoBytes,
+            timestamp: videoTimestamp,
+          };
+          // Calculate packet loss from aggregated data
+          if (videoPacketsReceived > 0 || videoPacketsLost > 0) {
+            const total = videoPacketsReceived + videoPacketsLost;
+            const loss = total > 0 ? (videoPacketsLost / total) * 100 : 0;
+            videoReceiveLoss = `${loss.toFixed(2)} %`;
+          }
+        }
+
+        // Calculate bitrate from aggregated audio data
+        if (audioTimestamp > 0) {
+          const lastAudioRecv = lastRecvAudioRef.current[peerId];
+          console.log(`[collectStats] Peer ${peerId} AUDIO AGGREGATED - totalBytes: ${totalAudioBytes}, timestamp: ${audioTimestamp}, lastRecv:`, lastAudioRecv);
+          if (lastAudioRecv && lastAudioRecv.timestamp > 0) {
+            const timeDiffMs = audioTimestamp - lastAudioRecv.timestamp;
+            console.log(`  timeDiffMs: ${timeDiffMs}, bytesDiff: ${totalAudioBytes - lastAudioRecv.bytes}`);
+            if (timeDiffMs > 0) {
+              const bitrate = ((totalAudioBytes - lastAudioRecv.bytes) * 8) / (timeDiffMs / 1000);
+              console.log(`  bitrate: ${bitrate}, isFinite: ${isFinite(bitrate)}, >= 0: ${bitrate >= 0}`);
+              if (isFinite(bitrate) && bitrate >= 0) {
+                audioReceiveBitrate = `${Math.floor(bitrate / 1000)} kbps`;
+                console.log(`🟢 AUDIO bitrate calculated: ${audioReceiveBitrate}`);
+              }
+            } else {
+              console.log(`  ⚠️ timeDiffMs <= 0, skipping bitrate calculation`);
+            }
+          } else {
+            console.log(`  ⚠️ First audio measurement for this peer`);
+          }
+          // Store aggregated bytes for next cycle
+          lastRecvAudioRef.current[peerId] = {
+            bytes: totalAudioBytes,
+            timestamp: audioTimestamp,
+          };
+          // Calculate packet loss from aggregated data
+          if (audioPacketsReceived > 0 || audioPacketsLost > 0) {
+            const total = audioPacketsReceived + audioPacketsLost;
+            const loss = total > 0 ? (audioPacketsLost / total) * 100 : 0;
+            audioReceiveLoss = `${loss.toFixed(2)} %`;
+          }
+        }
 
         // Update peer stats
         peerStatsRef.current[peerId].video.receiveBitrate = videoReceiveBitrate;
